@@ -9,6 +9,11 @@ import java.util.Map;
 /**
  * Selects the next customer in the order actually displayed by the list.
  * IDs are exact anchors only; their shape and numeric value never imply ordering.
+ *
+ * <p>Eligibility comes from the visible row, never from the ID: a (DIST) row is always
+ * skipped, and a (Retailer) row is skipped only when it immediately follows a (DIST)
+ * row with the same name. A fresh visit to the list starts at its first row, which has
+ * nothing above it and therefore cannot be a same-name shadow.</p>
  */
 public final class RetailerSequence {
     public enum Action {
@@ -144,6 +149,12 @@ public final class RetailerSequence {
 
             AccessibilityTree.RetailerRow predecessor = i > 0
                     ? rows.get(i - 1) : predecessorById.get(row.id);
+            if (predecessor == null && !RetailerPolicy.isRetailerId(last)) {
+                // Fresh visit: nothing is above the first row on screen, so it cannot be a
+                // same-name shadow of anything. It may be opened when it is a readable
+                // (Retailer) row. IDs never imply a position.
+                return decision(Action.OPEN, row.id, i, "");
+            }
             if (predecessor == null) {
                 return uncertain("Cannot verify the row immediately before " + row.id
                         + "; position it after a visible predecessor or enter a last-handled ID");
