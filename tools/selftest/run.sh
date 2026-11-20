@@ -7,7 +7,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 app="$here/../../app/src/main/java/com/vrksignatures/sudhaautobot"
 out="${SELFTEST_OUT:-$here/out}"
-mains=("${@:-CalendarSelfTest ListScrollSelfTest NextRetailerSelfTest}")
+mains=("${@:-CalendarSelfTest ListScrollSelfTest NextRetailerSelfTest RetailerEligibilitySelfTest}")
 rm -rf "$out" && mkdir -p "$out"
 sources=("$here"/stubs/android/graphics/*.java "$here"/stubs/android/view/accessibility/*.java
          "$app/AccessibilityTree.java" "$app/RetailerPolicy.java" "$app/CalendarDateSelector.java"
