@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SudhaAutoBot</string>
+
+    <!-- Floating panel -->
+    <string name="state_idle">IDLE</string>
+    <string name="panel_retailer_none">Retailer: —</string>
+    <string name="panel_drag_hint">⠿</string>
+    <string name="panel_counts_zero">SUCCESS 0    SKIPPED 0    ERRORS 0</string>
+    <string name="panel_progress_zero">Processed 0 / 125</string>
+    <string name="panel_ready">Ready — open Sudha Daily Orders, then press START</string>
+    <string name="action_start">▶ START</string>
+    <string name="action_pause">⏸ PAUSE</string>
+    <string name="action_reset">Reset</string>
+    <string name="action_hide">✕</string>
+    <string name="action_capture">◎</string>
+    <string name="action_fast_off">Fast OFF</string>
+    <string name="action_fast_on">Fast ON</string>
+
+    <!-- Accessibility service -->
+    <string name="accessibility_service_label">SudhaAutoBot</string>
+    <string name="accessibility_service_description">Automates the daily order-entry task in the Sudha Daily Orders app. It only reads and taps screens inside the package you configure, keeps a per-day ledger of processed retailers, and never submits the same order twice. It requires no network access.</string>
+
+    <!-- Main screen -->
+    <string name="setup_title">SudhaAutoBot</string>
+    <string name="setup_intro">Configure the Sudha Daily Orders package, grant both permissions, then start the daily batch from the floating panel. Progress is saved per day, so a pause or restart never repeats a retailer.</string>
+    <string name="label_package">Target app package</string>
+    <string name="hint_package">com.sudha.dailyorders</string>
+    <string name="label_expected">Retailers expected today</string>
+    <string name="label_last_handled_id">Last handled customer ID (optional)</string>
+    <string name="hint_last_handled_id">Example: ABC-17 or R 204</string>
+    <string name="resume_instructions">Enter the exact ID to resume after it. Leave blank to use saved progress. For a fresh run, make sure the customer list opens at its top; the app cannot confirm the true top on every phone.</string>
+    <string name="fast_setup_off">Fast: OFF</string>
+    <string name="fast_setup_on">Fast: ON (home/list waits only)</string>
+    <string name="fast_enabled_toast">Fast ON — shortens guarded home/list waits only</string>
+    <string name="fast_disabled_toast">Fast OFF — standard guarded home/list waits</string>
+    <string name="fresh_start_toast">START sent — for a fresh run, confirm the customer list is at the top</string>
+    <string name="resume_anchor_toast">START sent — searching for the exact anchor %1$s</string>
+    <string name="button_save">Save settings</string>
+    <string name="button_overlay">1. Allow floating panel</string>
+    <string name="button_accessibility">2. Enable accessibility service</string>
+    <string name="button_install_target">3. Open Sudha Daily Orders</string>
+    <string name="button_show_panel">Show floating panel</string>
+    <string name="button_start">▶ START from here</string>
+    <string name="button_pause">⏸ PAUSE</string>
+    <string name="button_reset">Reset today\'s ledger</string>
+    <!-- Screen inspector -->
+    <string name="button_capture">Check my Sudha app (capture screen)</string>
+    <string name="button_share_capture">Share last capture</string>
+    <string name="button_clear_captures">Clear captures</string>
+    <string name="capture_hint">Switch to the Sudha app now — capturing in 10 seconds…</string>
+    <string name="capture_none">No capture yet. Make sure the Sudha app is open and the accessibility service is ON.</string>
+    <string name="capture_share">Share</string>
+    <string name="capture_share_hint">Choose a chat app to paste the capture into.</string>
+    <string name="capture_cleared">Captures cleared.</string>
+    <string name="capture_clear_failed">Some capture files could not be deleted.</string>
+    <string name="close">Close</string>
+    <string name="button_refresh">Refresh status</string>
+    <string name="status_package_ok">Target app: FOUND (%1$s)</string>
+    <string name="status_package_missing">Target app: NOT INSTALLED (%1$s) — tap Check my Sudha app to read the real package name</string>
+    <string name="status_package_unset">Target app: not set yet</string>
+    <string name="status_overlay_ok">Floating panel permission: GRANTED</string>
+    <string name="status_overlay_missing">Floating panel permission: MISSING (tap step 1)</string>
+    <string name="status_accessibility_ok">Accessibility service: ENABLED</string>
+    <string name="status_accessibility_missing">Accessibility service: DISABLED (tap step 2)</string>
+    <string name="legend">Customer IDs are matched exactly. Only rows visibly marked Retailer are eligible; DIST rows and an immediately following same-name retailer are skipped.</string>
+    <string name="error_package_empty">Enter the exact Sudha Daily Orders package name.</string>
+    <string name="error_package_not_installed">No app with that package is installed on this device.</string>
+    <string name="reset_title">Reset today\'s ledger?</string>
+    <string name="reset_message">Today\'s SUCCESS, SKIPPED and ERROR records will be cleared so every retailer becomes eligible again. This is refused while an order is in flight.</string>
+    <string name="reset_confirm">Reset</string>
+    <string name="cancel">Cancel</string>
+</resources>

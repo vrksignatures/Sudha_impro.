@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Accessibility service contract for SudhaAutoBot.
+
+  packageNames is declared empty on purpose: MainActivity lets the user type the
+  target package and SudhaAccessibilityService applies it at runtime through
+  setServiceInfo(). AccessibilityServiceInfo instances are merged, so the runtime
+  value replaces this one.
+
+  canRetrieveWindowContent is the only screen-reading capability requested.
+
+  canPerformGestures is needed because some third-party rows ignore ACTION_CLICK
+  and because RecyclerView sometimes ignores ACTION_SCROLL_FORWARD.
+
+  canTakeScreenshot lets the service locate the floating "+" button from the actual
+  pixels. That button exposes no label, no view id and is not even reported as
+  clickable, so its position cannot be read from the accessibility tree and every
+  dp/fraction-based guess depends on the device's screen size and insets. Reading the
+  screen is what makes the tap reliable across devices. Screenshots are never stored
+  or uploaded.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled|typeViewClicked|typeViewFocused|typeNotificationStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="120"
+    android:packageNames=""
+    android:settingsActivity="com.vrksignatures.sudhaautobot.MainActivity"
+    android:summary="@string/accessibility_service_description" />
