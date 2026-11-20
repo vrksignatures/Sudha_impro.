@@ -1,10 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Framework Material theme only: the app has no AndroidX dependency. -->
-    <style name="Theme.SudhaAutoBot" parent="@android:style/Theme.Material.Light.DarkActionBar">
-        <item name="android:colorPrimary">#1B5E20</item>
-        <item name="android:colorPrimaryDark">#0D3310</item>
-        <item name="android:colorAccent">#2E7D32</item>
-        <item name="android:statusBarColor">#0D3310</item>
+    <!--
+      Framework Material theme only: the app has no AndroidX dependency.
+      Light, quiet, one brand colour. Dialogs and switches take the same accent.
+    -->
+    <style name="Theme.SudhaAutoBot" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorPrimary">@color/brand</item>
+        <item name="android:colorPrimaryDark">@color/bg</item>
+        <item name="android:colorAccent">@color/brand</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/muted</item>
     </style>
 </resources>

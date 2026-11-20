@@ -7,9 +7,6 @@ operator's screen recording `20261118_000330_2 (compressed by happyscribe.com).m
 Everything in the tables marked **verified** was read directly off the recording's frames.
 Anything that could not be confirmed is marked **to confirm**.
 
-The user requirements for IDs, row eligibility, exact-anchor resume and Fast mode below
-supersede any older SMR-only assumptions in the historical recording notes.
-
 > **Note on the audio track.** The recording has a Hindi/Hinglish narration track, but the
 > narration was **not transcribed** when this document was written — no transcript was
 > supplied and the audio could not be listened to in this environment. The flow below is
@@ -28,8 +25,8 @@ were seen in the recording.
 | --- | --- | --- | --- |
 | 1 | Home — `Daily Orders` | `Welcome!`, tiles `Customers`, `Instant Delivery`, `Reports`, `Feedback`, `Bills`, `Manual Work`, `Market Summary`, `Ledger`, `Complaints` | Tap **Customers** |
 | 2 | Customer list | `Customers`, `Total Customers: 125`, `All Distributors`, `Show Retailers` | Ensure the list is expanded — see §2 |
-| 3 | Customer list | `Delivery Point (Retailer)`, `Customer Id: SMR2255`, `Customer Id: SM65`, `S O(s)` | Read the exact ID and visible type/name; choose the next eligible unhandled row in displayed order |
-| 4 | Customer Details | `Customer Details`, `Name`, `Phone`, `Distributor Name`, `Delivery Point Name`, `View Orders`, tabs `Milk` / `PROD`, bottom tabs `Transactions` / `Pay` | Verify the header shows the **same exact** ID, then tap **Milk** |
+| 3 | Customer list | `Delivery Point (Retailer)`, `Customer Id: SMR2255`, `Customer Id: SM65`, `S O(s)` | Pick the first row whose id matches `SMR<digits>` and is not already in today's ledger; tap it |
+| 4 | Customer Details | `Customer Details`, `Name`, `Phone`, `Distributor Name`, `Delivery Point Name`, `View Orders`, tabs `Milk` / `PROD`, bottom tabs `Transactions` / `Pay` | Verify the header shows the **same** `SMR` id, then tap **Milk** |
 | 5 | Order history (titled `New Order Milk` / `Orders`) | `Order Id: 368538`, `Status: Order placed`, `Shift: Morning`, `No of Products: 6`, `Total Amount: ₹1321.40`, `Ordered qty`, `Delivery qty` | Tap the floating orange **+** at the bottom-right |
 | 6 | Order form — `New Order Milk` | `Date`, `Item Group`, `Zone`, `Party`, `Item · Rate · MQty · EQty · Total`, `Copy Order`, `View Order Summary`, `PLACE ORDER` | Tap **Copy Order** immediately. Do **not** inspect the table. |
 | 7 | Calendar dialog | `2026`, `Wed, Nov 18`, `< November 2026`, `S M T W T F S`, `CANCEL`, `OK` | Tap the **T-1** day cell, then **OK** |
@@ -48,23 +45,11 @@ Only after step 10 is the order complete.
 *(both verified)*
 
 1. **The first row is a distributor, not a retailer.** The top row carries
-   `Customer Id: SM65` whereas an example retailer carries `Customer Id: SMR2196`.
-   These are examples only: the ID shape does not decide eligibility. Any nonblank exact
-   ID is accepted when its row is visibly marked `(Retailer)`.
+   `Customer Id: SM65` whereas real retailers are `Customer Id: SMR2196`. The bot must
+   accept `SMR` + digits only and must never treat `SM65` — or a bare number — as a retailer.
 2. **The list collapses to two rows.** `Total Customers: 2` instead of `125`. The
    `Show Retailers` checkbox exposes no readable checked state, so the bot judges by
-   counting visible customer ID rows and taps `Show Retailers` until the list looks expanded.
-
-### Eligibility and adjacency
-
-Never click a row visibly marked `(DIST)`. Also skip a `(Retailer)` row only when it is
-immediately after a `(DIST)` row with the same name. A later retailer with that name stays
-eligible. A distributor's ID format never changes its type. The bot does not open customer
-details to classify rows. It keeps verified predecessor context across overlapping screen
-scrolls; if row type, name or adjacency cannot be verified, it stops rather than guessing.
-
-IDs are exact nonblank strings. The bot does not strip internal punctuation/spaces, add a
-prefix, sort numerically or derive the next ID. The displayed row order is the only order.
+   **counting visible `SMR` rows** and taps `Show Retailers` until the count looks expanded.
 
 Long lists are scrolled by the bot itself; see §8.6 for how, and for how it decides the
 list has ended.
@@ -100,7 +85,7 @@ single button `OK`.
         │  tap the next older day  →  OK               │
         └───────────────────┬──────────────────────────┘
                             │
-              wait ~2–3 s for a dialog
+              look every 150 ms for a dialog *
                             │
         ┌───────────────────┴───────────────────┐
         │                                       │
@@ -116,6 +101,9 @@ single button `OK`.
    tap OK, press BACK, mark this SMR
    SKIPPED_NO_DATA, next SMR
 ```
+
+\* Until the form is seen rewritten by the copied order, or, failing that, for the 2–3 s it
+always waited. See [`SPEED-AND-STEALTH.md`](SPEED-AND-STEALTH.md) §2.
 
 ### What "T" is
 
@@ -245,24 +233,23 @@ the customer list, where the next `SMR` is picked up.
 2. Never tap `PLACE ORDER` unless the app returned **no error dialog**.
 3. Never place an order twice for the same retailer. A pre-submit marker is written to the
    daily ledger before `PLACE ORDER` is tapped.
-4. Never infer eligibility from the ID format. Skip visible `(DIST)` rows and only an
-   immediately following same-name `(Retailer)` shadow.
+4. Never treat `SM65` (distributor) or a bare number as a retailer id.
 5. Never infer success from quantities, totals or item names.
 6. Never treat `Status: Order placed` as a success signal — that is the status of a
    **previous** order printed on every history card (verified: `Order Id: 368538`,
    `Status: Order placed`). Reading it as success marks a retailer done before anything is
    copied or placed.
-7. After the 5th error, `OK` → `BACK` → mark the customer `SKIPPED_NO_DATA` → next eligible customer.
+7. After the 5th error, `OK` → `BACK` → mark the retailer `SKIPPED_NO_DATA` → next `SMR`.
    The ledger write happens **before** the `BACK`, so an interrupted exit cannot cause a
    retry that orders twice.
 8. Progress survives a restart: a retailer already recorded for today is never reprocessed.
-9. The next customer is always the one **after the exact last-handled ID**, in the order
-   the list shows them. A replayed scroll position is only a hint: verify the exact anchor
-   before continuing. If it is missed, perform a checked scan; never choose the nearest row.
-   A manual exact-ID anchor is available in setup. With no anchor, the app cannot prove that
-   the list viewport is at the true top on every phone.
+9. The next retailer is always the one **after the retailer handled last**, in the order
+   the list shows them. Never go back up to an earlier row while there are rows below.
 10. `Today Order already created` means the retailer is done. Do not wait for a payment
     screen: record it, press `BACK`, next `SMR`.
+11. Nothing is hurried from just before `PLACE ORDER` until the order is on record. Fast
+    mode (`docs/SPEED-AND-STEALTH.md`, 2a) stands aside for the confirmation and the
+    payment, and "no dialog yet" is never taken for "no dialog" after a fixed short wait.
 
 ---
 
@@ -453,19 +440,19 @@ does not, step 2 is what keeps the run moving, 15 seconds later.
 ### 8.8 After a retailer, the bot went back to the top of the list (same recording)
 
 `SMR2250` was opened by hand and the bot completed it. Back on the list it opened
-`SMR2255`, the first row, not the next row in displayed order.
+`SMR2255`, the first row, not `SMR2249`.
 
 The app reopens the customer list **folded up and at the top** after every retailer. The
 rule was "open the first unhandled SMR on the screen", which at the top of the list is the
 first row. (In the recording the ledger had also just been emptied with Reset, so every row
 counted as unhandled.)
 
-Now (`RetailerSequence`): the ledger remembers the exact customer ID handled last and an
-approximate scroll count. The bot may replay that count, but it opens nothing until the
-exact anchor ID is visible. If replay misses, it returns to the start and searches for the
-exact ID; if a full checked scan cannot find it, the run stops. It then continues with the
-first eligible row below the anchor, applying the visible type/name adjacency rule. IDs are
-never sorted or used to infer a successor.
+Now (`RetailerSequence`): the ledger remembers the retailer handled last. On the list the
+bot scrolls down until that retailer is on screen and opens the first unhandled SMR
+**below** it; rows above it are not opened. Only the order on the screen is used, not the
+numbers. When the bottom of the list is reached and fewer retailers have been handled than
+expected, the bot goes through the list **once** more from the top for those passed over,
+and then finishes.
 
 Cost: because the app starts the list at the top every time, the bot has to scroll down to
 its place again after each retailer — about twenty swipes for the last retailers of 125.
@@ -475,19 +462,51 @@ its place again after each retailer — about twenty swipes for the last retaile
 T-1 … T-5 were worked out from the phone's date. They are now counted from the date the
 calendar itself opens on (§3, "What T is").
 
-### 8.10 Fast mode
+### 8.10 "Orders list is empty. Retry?" held the bot on one retailer (fifth recording, 18 Nov 2026)
 
-Fast ON/OFF is available in the setup screen and floating panel. Fast only shortens guarded
-home/list idle waits. It does not add a separate fast path or change copy, calendar, order
-or payment waits.
+`SMR2235` was opened, `Milk` was pressed, and the page that came up — titled
+`New Order Milk` — was white, with a dark bar at the bottom: **`Orders list is empty.
+Retry?`** and a **`YES`** button. After about three seconds the bar went away and the page
+stayed white. The bot did nothing more with that retailer.
+
+Why: the bot knows the order page by what is on it (`Order created on`, `Order Qty`, the
+`+` button's surroundings). A white page with only a title matches none of the screens it
+knows, so it waited for "a recognised Sudha screen", and when that budget ran out it stopped
+the run. The old check for an empty history ran only once the page had already been
+recognised as the history, which this page never was.
+
+Now (`AppNotices.isEmptyOrderList` / `isBlankOrderList`, and step 1c of `inspect` in the
+service):
+
+1. **The message is on the screen** → the retailer is recorded `SKIPPED_NO_HISTORY`
+   (counted under SKIPPED, note "The app said: Orders list is empty. Retry? Nothing to
+   copy"), `BACK` is pressed **at once**, and the bot goes on to the next SMR through the
+   usual way back to the list. No waiting.
+2. **The message was missed** (it lasts three seconds) and only the white page is left → the
+   same, once the page has stayed white for four seconds and three looks in a row. The page
+   is also white for a moment while it opens for a retailer who does have orders; the wait
+   is what keeps those from being skipped.
+3. **`YES` is never pressed** (it only asks the app the same question again) and neither is
+   `+`: with no earlier order there is nothing to copy.
+4. The same words arriving as a toast are handled the same way, but only while a retailer
+   is open.
+5. None of this happens while an order may be on its way (after `PLACE ORDER`); that case
+   keeps its own, stricter handling (§8.7).
+
+A screen that shows an order card, the order form, a payment page or a "please wait" box is
+never taken for an empty list, whatever else is written on it.
+
+Tested by rule (`NextRetailerSelfTest`, section G) with the words from the recording; not
+yet watched on the phone.
 
 ## 9. Still to confirm
 
+* **The empty order list** (§8.10) — that the bar's words are readable in the window on this
+  phone. If they are not, rule 2 (the white page, four seconds) is what moves the bot on.
 * **Toast delivery** — that `Today Order already created` reaches the service as an event on
   this phone (§8.7). The 15-second rule covers the case where it does not.
 * **`BACK` from the customer list** leads to the Daily Orders first page (seen twice in the
-  fourth recording). The fallback exact-anchor scan reopens this path and still verifies
-  the anchor before choosing a row.
+  fourth recording). The pass "once more from the top" relies on it.
 
 * **The audio narration** of both recordings — not transcribed (see the note at the top).
   If it describes a different order of operations, correct this file.

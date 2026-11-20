@@ -23,8 +23,9 @@ import java.util.regex.Pattern;
  *   <li>Nodes are never recycled. {@code recycle()} is deprecated since API 33 and
  *       double-recycling a shared node crashes older devices; leaking a few nodes per
  *       pass is cheaper and safer.</li>
- *   <li>Nothing here decides <em>business</em> rules. A row is only returned when its
- *       subtree contains one explicit customer ID and no other customer ID.</li>
+ *   <li>Nothing here decides <em>business</em> rules. In particular a node is only
+ *       returned as a retailer row when its subtree contains exactly the requested
+ *       SMR id and no other, so a distributor row can never be clicked by accident.</li>
  * </ul>
  */
 public final class AccessibilityTree {
@@ -35,10 +36,6 @@ public final class AccessibilityTree {
     private static final Pattern CUSTOMER_TOTAL = Pattern.compile(
             "(?i)(?:total\\s*(?:customers?|retailers?)?|customers?|retailers?)\\s*[:\\-]?\\s*(\\d{1,5})");
     private static final Pattern BARE_TOTAL = Pattern.compile("(?i)\\b(\\d{1,5})\\s+(?:customers?|retailers?)\\b");
-    private static final Pattern CUSTOMER_ID_LABEL = Pattern.compile(
-            "(?i)\\bcustomer\\s*id(?:\\s*[:：#]\\s*|\\s+)(.*)$");
-    private static final Pattern CUSTOMER_TYPE = Pattern.compile(
-            "(?i)\\(\\s*(DIST|RETAILER)\\s*\\)");
 
     private AccessibilityTree() {
     }
@@ -68,22 +65,15 @@ public final class AccessibilityTree {
         }
     }
 
-    /** One customer row found on the list screen. */
+    /** One retailer row found on the list screen. */
     public static final class RetailerRow {
-        public enum Type { DIST, RETAILER, UNKNOWN }
-
         public final String id;
-        public final String name;
-        public final Type type;
         public final AccessibilityNodeInfo node;
         public final Rect bounds;
 
         RetailerRow(String id, AccessibilityNodeInfo node) {
             this.id = id;
             this.node = node;
-            String rowText = allText(node);
-            this.type = rowType(rowText);
-            this.name = rowName(rowText);
             Rect rect = new Rect();
             node.getBoundsInScreen(rect);
             this.bounds = rect;
@@ -91,7 +81,7 @@ public final class AccessibilityTree {
 
         @Override
         public String toString() {
-            return id + " " + type + " " + name + "@" + bounds.top;
+            return id + "@" + bounds.top;
         }
     }
 
@@ -160,6 +150,12 @@ public final class AccessibilityTree {
         if (node == null || depth > MAX_DEPTH) return null;
         String label = textOf(node).toLowerCase(Locale.ROOT);
         if (!label.isEmpty() && label.contains(needle.toLowerCase(Locale.ROOT))) return node;
+        // A label the app has renamed, once the new name is in the notebook (LearnedUi).
+        // Never taken with an empty notebook.
+        if (!label.isEmpty() && !LearnedUi.isEmpty()
+                && LearnedUi.translate(label).contains(needle.toLowerCase(Locale.ROOT))) {
+            return node;
+        }
         int children = node.getChildCount();
         for (int i = 0; i < children; i++) {
             AccessibilityNodeInfo found = findContaining(node.getChild(i), needle, depth + 1);
@@ -240,9 +236,9 @@ public final class AccessibilityTree {
         return dispatcher.tap(new Rect(rect));
     }
 
-    // ------------------------------------------------------------- customer rows
+    // ------------------------------------------------------------- retailers
 
-    /** Distinct exact customer IDs visible on screen, in visual (top-down) order. */
+    /** Distinct {@code SMR<digits>} ids visible on screen, in visual (top-down) order. */
     public static List<String> visibleRetailerIds(AccessibilityNodeInfo root) {
         List<RetailerRow> rows = retailerRows(root);
         List<String> ids = new ArrayList<>(rows.size());
@@ -251,9 +247,8 @@ public final class AccessibilityTree {
     }
 
     /**
-     * Customer rows on screen, de-duplicated by exact ID and sorted by visual position.
-     * IDs are read only from an explicit {@code Customer Id:} field. Type and name are
-     * retained because ID shape alone does not establish retailer eligibility.
+     * Retailer rows on screen, de-duplicated by id and sorted by vertical position.
+     * Only rows whose subtree carries exactly one SMR id are returned.
      */
     public static List<RetailerRow> retailerRows(AccessibilityNodeInfo root) {
         if (root == null) return Collections.emptyList();
@@ -265,49 +260,43 @@ public final class AccessibilityTree {
             AccessibilityNodeInfo rowNode = ascendToRow(entry.getValue(), entry.getKey());
             if (rowNode != null) rows.add(new RetailerRow(entry.getKey(), rowNode));
         }
-        Collections.sort(rows, (a, b) -> {
-            int vertical = Integer.compare(a.bounds.top, b.bounds.top);
-            return vertical != 0 ? vertical : Integer.compare(a.bounds.left, b.bounds.left);
-        });
+        Collections.sort(rows, (a, b) -> Integer.compare(a.bounds.top, b.bounds.top));
         return rows;
     }
 
     private static void collectIdNodes(AccessibilityNodeInfo node,
                                        Map<String, AccessibilityNodeInfo> out, int depth) {
         if (node == null || depth > MAX_DEPTH) return;
-        String id = customerIdFromLabel(textOf(node));
-        if (id != null && !out.containsKey(id)) {
-            out.put(id, node);
+        String label = textOf(node);
+        if (!label.isEmpty()) {
+            Matcher matcher = RetailerPolicy.embeddedPattern().matcher(label);
+            while (matcher.find()) {
+                String id = matcher.group();
+                if (!out.containsKey(id)) out.put(id, node);
+            }
         }
         int children = node.getChildCount();
         for (int i = 0; i < children; i++) collectIdNodes(node.getChild(i), out, depth + 1);
     }
 
     /**
-     * Climbs from the ID field to its customer row: the highest ancestor (within a few
-     * hops) whose subtree contains exactly this customer ID and no other customer ID.
-     * Prefers a clickable ancestor when one exists.
+     * Climbs from the id-bearing text node to the row container: the highest ancestor
+     * (within a few hops) whose subtree still contains exactly this id and no other
+     * SMR id. Prefers a clickable ancestor when one exists.
      */
     private static AccessibilityNodeInfo ascendToRow(AccessibilityNodeInfo textNode, String id) {
-        AccessibilityNodeInfo nearestClickable = null;
+        AccessibilityNodeInfo best = null;
         AccessibilityNodeInfo current = textNode;
         for (int hop = 0; current != null && hop <= MAX_ANCESTOR_HOPS; hop++) {
             if (!subtreeHasOnly(current, id)) break;
-            if (current.isClickable()) {
-                if (nearestClickable == null) nearestClickable = current;
-                String text = allText(current);
-                if (rowType(text) != RetailerRow.Type.UNKNOWN && !rowName(text).isEmpty()) {
-                    return current;
-                }
-            }
+            if (current.isClickable()) best = current;
+            else if (best == null) best = current;
             current = current.getParent();
         }
-        // If row context cannot be reached, keep the smallest safe target. Its missing
-        // type/name will make the sequence stop instead of clicking based on ID shape.
-        return nearestClickable != null ? nearestClickable : textNode;
+        return best;
     }
 
-    /** True when every customer ID in the subtree equals {@code id} and at least one exists. */
+    /** True when every SMR token in the subtree equals {@code id} and at least one exists. */
     private static boolean subtreeHasOnly(AccessibilityNodeInfo node, String id) {
         Set<String> ids = new LinkedHashSet<>();
         collectIds(node, ids, 0);
@@ -316,8 +305,8 @@ public final class AccessibilityTree {
 
     private static void collectIds(AccessibilityNodeInfo node, Set<String> out, int depth) {
         if (node == null || depth > MAX_DEPTH) return;
-        String id = customerIdFromLabel(textOf(node));
-        if (id != null) out.add(id);
+        Matcher matcher = RetailerPolicy.embeddedPattern().matcher(textOf(node));
+        while (matcher.find()) out.add(matcher.group());
         int children = node.getChildCount();
         for (int i = 0; i < children; i++) collectIds(node.getChild(i), out, depth + 1);
     }
@@ -334,97 +323,6 @@ public final class AccessibilityTree {
     /** How many distinct retailer rows are visible right now. */
     public static int visibleRetailerCount(AccessibilityNodeInfo root) {
         return visibleRetailerIds(root).size();
-    }
-
-    /** True only when the exact ID appears as a standalone value somewhere on screen. */
-    public static boolean containsExactCustomerId(AccessibilityNodeInfo root, String expected) {
-        if (root == null || !RetailerPolicy.isRetailerId(expected)) return false;
-        String text = allText(root);
-        int at = 0;
-        while ((at = text.indexOf(expected, at)) >= 0) {
-            int end = at + expected.length();
-            boolean leftBoundary = at == 0 || !isIdWordChar(text.charAt(at - 1));
-            boolean rightBoundary = end >= text.length() || !isIdWordChar(text.charAt(end));
-            if (leftBoundary && rightBoundary) return true;
-            at++;
-        }
-        return false;
-    }
-
-    private static boolean isIdWordChar(char value) {
-        return Character.isLetterOrDigit(value) || value == '_';
-    }
-
-    private static String customerIdFromLabel(String label) {
-        if (label == null) return null;
-        Matcher matcher = CUSTOMER_ID_LABEL.matcher(label);
-        if (!matcher.find()) return null;
-        String value = matcher.group(1);
-        int lineEnd = value.indexOf('\n');
-        if (lineEnd >= 0) value = value.substring(0, lineEnd);
-        int duplicate = value.toLowerCase(Locale.ROOT).indexOf(" customer id:");
-        if (duplicate >= 0) value = value.substring(0, duplicate);
-        Matcher followingField = Pattern.compile(
-                "(?i)\\s+(?:customer\\s+type|type|name|phone|mobile|delivery\\s+point)\\s*[:：]")
-                .matcher(value);
-        if (followingField.find()) value = value.substring(0, followingField.start());
-        String exact = value.trim();
-        return RetailerPolicy.isRetailerId(exact) ? exact : null;
-    }
-
-    private static RetailerRow.Type rowType(String rowText) {
-        Matcher matcher = CUSTOMER_TYPE.matcher(rowText == null ? "" : rowText);
-        boolean retailer = false;
-        while (matcher.find()) {
-            if ("DIST".equalsIgnoreCase(matcher.group(1))) return RetailerRow.Type.DIST;
-            retailer = true;
-        }
-        return retailer ? RetailerRow.Type.RETAILER : RetailerRow.Type.UNKNOWN;
-    }
-
-    private static String rowName(String rowText) {
-        if (rowText == null || rowText.trim().isEmpty()) return "";
-        String[] lines = rowText.split("[\\r\\n]+");
-        String preceding = "";
-        for (String rawLine : lines) {
-            String line = rawLine.trim();
-            if (line.isEmpty()) continue;
-            Matcher type = CUSTOMER_TYPE.matcher(line);
-            if (type.find()) {
-                String prefix = cleanName(line.substring(0, type.start()));
-                if (!prefix.isEmpty()) return prefix;
-                if (!preceding.isEmpty()) return preceding;
-            }
-            String labelled = labelledName(line);
-            if (!labelled.isEmpty()) return labelled;
-            if (!isRowMetadata(line) && !CUSTOMER_ID_LABEL.matcher(line).find()) {
-                preceding = cleanName(line);
-            }
-        }
-        return preceding;
-    }
-
-    private static String labelledName(String line) {
-        Matcher matcher = Pattern.compile("(?i)^(?:customer\\s+)?(?:delivery\\s+point\\s+)?name\\s*[:：-]\\s*(.+)$")
-                .matcher(line);
-        return matcher.find() ? cleanName(matcher.group(1)) : "";
-    }
-
-    private static String cleanName(String value) {
-        if (value == null) return "";
-        String cleaned = value.replaceAll("(?i)^(?:(?:delivery point|customer type)\\s*[:：-]?\\s*|(?:customer\\s+)?name\\s*[:：-]\\s*)", "")
-                .replaceAll("\\s+", " ").trim();
-        return isRowMetadata(cleaned) ? "" : cleaned;
-    }
-
-    private static boolean isRowMetadata(String line) {
-        String lower = line.toLowerCase(Locale.ROOT);
-        return lower.startsWith("customer id") || lower.startsWith("phone")
-                || lower.startsWith("mobile") || lower.startsWith("distributor name")
-                || lower.startsWith("delivery point name") || lower.startsWith("type:")
-                || lower.startsWith("show retailer") || lower.startsWith("all distributor")
-                || lower.startsWith("total customer") || lower.equals("customers")
-                || lower.startsWith("search") || lower.startsWith("filter");
     }
 
     /**
@@ -705,7 +603,11 @@ public final class AccessibilityTree {
     /** Same label comparison the tree search uses; shared so callers stay consistent. */
     public static boolean equalsLabel(String actual, String expected) {
         if (actual == null || expected == null) return false;
-        return normalize(actual).equals(normalize(expected));
+        String shown = normalize(actual);
+        String wanted = normalize(expected);
+        // The second half is a label the app has renamed, once the new name is in the
+        // notebook (LearnedUi). It is always false with an empty notebook.
+        return shown.equals(wanted) || LearnedUi.same(shown, wanted);
     }
 
     private static String normalize(String value) {

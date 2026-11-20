@@ -24,8 +24,8 @@ import java.util.Locale;
  * {
  *   "version": 1,
  *   "sessionDate": "2025-11-17",
- *   "records": { "exact customer ID": { "status": "SUCCESS", "updatedAt": 1763..., "detail": "..." } },
- *   "pending": { "retailerId": "exact customer ID", "phase": "PLACE_TAP_PENDING", "createdAt": 1763... } | null
+ *   "records": { "SMR101": { "status": "SUCCESS", "updatedAt": 1763..., "detail": "..." } },
+ *   "pending": { "retailerId": "SMR101", "phase": "PLACE_TAP_PENDING", "createdAt": 1763... } | null
  * }
  * </pre>
  *
@@ -154,7 +154,7 @@ public final class DailyLedger {
         return total;
     }
 
-    /** Every exact customer ID handled today, whatever the outcome. */
+    /** Every retailer handled today, whatever the outcome. */
     public synchronized int processedCount() {
         return records().length();
     }
@@ -192,8 +192,8 @@ public final class DailyLedger {
     }
 
     /**
-     * The customer recorded most recently today, whatever the outcome; null when none.
-     * The next customer is selected after this exact ID in displayed list order.
+     * The retailer recorded most recently today, whatever the outcome; null when none.
+     * The next retailer is the one after it in the list - see {@link RetailerSequence}.
      */
     public synchronized String lastHandledId() {
         String id = data.optString("lastHandled", "");
@@ -209,6 +209,46 @@ public final class DailyLedger {
         JSONObject backup = copy(data);
         data.remove("lastHandled");
         if (write(data)) return true;
+        data = backup;
+        return false;
+    }
+
+    /**
+     * Sets the place in the list by hand: the next retailer is the one after {@code id}.
+     * Used when the operator gives a start point (see {@link StartPoint}); writes no record.
+     */
+    public synchronized boolean setLastHandled(String id) {
+        if (!RetailerPolicy.isRetailerId(id)) return false;
+        if (id.equals(lastHandledId())) return true;
+        JSONObject backup = copy(data);
+        try {
+            data.put("lastHandled", id);
+            if (write(data)) return true;
+        } catch (JSONException e) {
+            Log.e(TAG, "setLastHandled() failed", e);
+        }
+        data = backup;
+        return false;
+    }
+
+    /**
+     * Records a retailer as done before this run (it sits above the operator's start
+     * point). Unlike {@link #record} it never replaces an existing record and does not move
+     * the place in the list.
+     */
+    public synchronized boolean recordDoneBefore(String id, String detail) {
+        if (!RetailerPolicy.isRetailerId(id) || isProcessed(id)) return false;
+        JSONObject backup = copy(data);
+        try {
+            JSONObject entry = new JSONObject();
+            entry.put("status", LedgerStatus.DONE_BEFORE.name());
+            entry.put("updatedAt", System.currentTimeMillis());
+            entry.put("detail", detail == null ? "" : detail);
+            records().put(id, entry);
+            if (write(data)) return true;
+        } catch (JSONException e) {
+            Log.e(TAG, "recordDoneBefore() failed", e);
+        }
         data = backup;
         return false;
     }

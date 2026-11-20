@@ -1,51 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">SudhaAutoBot</string>
+    <string name="app_name">Sutara</string>
+
+    <!-- The maker's mark and the title card -->
 
     <!-- Floating panel -->
     <string name="state_idle">IDLE</string>
-    <string name="panel_retailer_none">Retailer: —</string>
-    <string name="panel_drag_hint">⠿</string>
-    <string name="panel_counts_zero">SUCCESS 0    SKIPPED 0    ERRORS 0</string>
-    <string name="panel_progress_zero">Processed 0 / 125</string>
-    <string name="panel_ready">Ready — open Sudha Daily Orders, then press START</string>
-    <string name="action_start">▶ START</string>
-    <string name="action_pause">⏸ PAUSE</string>
+    <string name="panel_retailer_none">—</string>
+    <string name="panel_counts_zero">Placed 0  ·  Skipped 0  ·  Check 0</string>
+    <string name="panel_progress_zero">0 / 125</string>
+    <string name="aakriti_name" translatable="false">Sutara</string>
+    <!-- Her mood line on the pod. A small joke about who does the work now. -->
+    <string name="mood_idle">Ready</string>
+    <string name="mood_working">Working</string>
+    <string name="mood_paying">Placing the order</string>
+    <string name="mood_paused">Paused</string>
+    <string name="mood_stopped">Needs attention</string>
+    <string name="mood_complete">Done</string>
+    <string name="mood_learning">Adjusted to a changed screen</string>
+    <string name="panel_complete_flourish">Kaam complete</string>
+    <string name="complete_toast">Kaam complete hua, aapka kaam complete hua!</string>
+    <string name="panel_ready">Ready. Open Sudha Daily Orders, then press Start.</string>
+    <string name="action_start">Start</string>
+    <string name="action_pause">Pause</string>
     <string name="action_reset">Reset</string>
-    <string name="action_hide">✕</string>
-    <string name="action_capture">◎</string>
-    <string name="action_fast_off">Fast OFF</string>
-    <string name="action_fast_on">Fast ON</string>
 
     <!-- Accessibility service -->
-    <string name="accessibility_service_label">SudhaAutoBot</string>
-    <string name="accessibility_service_description">Automates the daily order-entry task in the Sudha Daily Orders app. It only reads and taps screens inside the package you configure, keeps a per-day ledger of processed retailers, and never submits the same order twice. It requires no network access.</string>
+    <string name="accessibility_service_label">Sutara</string>
+    <string name="accessibility_service_description">Automates the daily order-entry task in the Sudha Daily Orders app. It only reads and taps screens inside the package you configure, keeps a per-day ledger of processed retailers, and never submits the same order twice. The automation itself never uses the network; the app goes online only when you ask it to download a sound of your own.</string>
 
     <!-- Main screen -->
-    <string name="setup_title">SudhaAutoBot</string>
-    <string name="setup_intro">Configure the Sudha Daily Orders package, grant both permissions, then start the daily batch from the floating panel. Progress is saved per day, so a pause or restart never repeats a retailer.</string>
+    <string name="setup_intro">Name the Sudha Daily Orders package. Sutara reads the number of retailers from the app\'s own “Total Customers” line; the figure below is used only when the app shows none. Progress is saved per day, so a pause or a restart never repeats a retailer.</string>
     <string name="label_package">Target app package</string>
     <string name="hint_package">com.sudha.dailyorders</string>
-    <string name="label_expected">Retailers expected today</string>
-    <string name="label_last_handled_id">Last handled customer ID (optional)</string>
-    <string name="hint_last_handled_id">Example: ABC-17 or R 204</string>
-    <string name="resume_instructions">Enter the exact ID to resume after it. Leave blank to use saved progress. For a fresh run, make sure the customer list opens at its top; the app cannot confirm the true top on every phone.</string>
-    <string name="fast_setup_off">Fast: OFF</string>
-    <string name="fast_setup_on">Fast: ON (home/list waits only)</string>
-    <string name="fast_enabled_toast">Fast ON — shortens guarded home/list waits only</string>
-    <string name="fast_disabled_toast">Fast OFF — standard guarded home/list waits</string>
-    <string name="fresh_start_toast">START sent — for a fresh run, confirm the customer list is at the top</string>
-    <string name="resume_anchor_toast">START sent — searching for the exact anchor %1$s</string>
+    <string name="label_expected">Retailers expected (only if the app shows no total)</string>
     <string name="button_save">Save settings</string>
-    <string name="button_overlay">1. Allow floating panel</string>
-    <string name="button_accessibility">2. Enable accessibility service</string>
-    <string name="button_install_target">3. Open Sudha Daily Orders</string>
+    <string name="button_overlay">Allow the floating panel</string>
+    <string name="button_accessibility">Turn on the accessibility service</string>
+    <string name="button_install_target">Open Sudha Daily Orders</string>
     <string name="button_show_panel">Show floating panel</string>
-    <string name="button_start">▶ START from here</string>
-    <string name="button_pause">⏸ PAUSE</string>
+    <string name="button_start">Start today\'s orders</string>
+    <string name="button_pause">Pause</string>
     <string name="button_reset">Reset today\'s ledger</string>
     <!-- Screen inspector -->
-    <string name="button_capture">Check my Sudha app (capture screen)</string>
+    <string name="button_capture">Capture screen</string>
     <string name="button_share_capture">Share last capture</string>
     <string name="button_clear_captures">Clear captures</string>
     <string name="capture_hint">Switch to the Sudha app now — capturing in 10 seconds…</string>
@@ -56,18 +54,192 @@
     <string name="capture_clear_failed">Some capture files could not be deleted.</string>
     <string name="close">Close</string>
     <string name="button_refresh">Refresh status</string>
-    <string name="status_package_ok">Target app: FOUND (%1$s)</string>
-    <string name="status_package_missing">Target app: NOT INSTALLED (%1$s) — tap Check my Sudha app to read the real package name</string>
-    <string name="status_package_unset">Target app: not set yet</string>
-    <string name="status_overlay_ok">Floating panel permission: GRANTED</string>
-    <string name="status_overlay_missing">Floating panel permission: MISSING (tap step 1)</string>
-    <string name="status_accessibility_ok">Accessibility service: ENABLED</string>
-    <string name="status_accessibility_missing">Accessibility service: DISABLED (tap step 2)</string>
-    <string name="legend">Customer IDs are matched exactly. Only rows visibly marked Retailer are eligible; DIST rows and an immediately following same-name retailer are skipped.</string>
+    <string name="status_package_ok">Found (%1$s)</string>
+    <string name="status_package_missing">Not installed (%1$s) — use Capture screen (Backstage) to read the real package name</string>
+    <string name="status_package_unset">Not set yet</string>
+    <string name="status_overlay_ok">Granted</string>
+    <string name="status_overlay_missing">Missing — tap to allow</string>
+    <string name="status_accessibility_ok">Awake</string>
+    <string name="status_accessibility_missing">Asleep — tap, then switch on Sutara</string>
+    <string name="legend">Only IDs shaped SMR followed by digits are ever touched. Distributor IDs such as SM65 and plain numbers are ignored.</string>
     <string name="error_package_empty">Enter the exact Sudha Daily Orders package name.</string>
     <string name="error_package_not_installed">No app with that package is installed on this device.</string>
-    <string name="reset_title">Reset today\'s ledger?</string>
-    <string name="reset_message">Today\'s SUCCESS, SKIPPED and ERROR records will be cleared so every retailer becomes eligible again. This is refused while an order is in flight.</string>
+    <string name="reset_title">Reset today\'s session?</string>
+    <string name="reset_message">Today\'s SUCCESS, SKIPPED and ERROR records will be cleared so every retailer becomes eligible again. This is refused while an order is in flight.\n\nWhat Sutara has learned about the Sudha app (renamed labels, the roster) is NOT erased. That has its own button in her notebook.</string>
     <string name="reset_confirm">Reset</string>
     <string name="cancel">Cancel</string>
+
+    <!-- Sections -->
+    <string name="progress_title">Today</string>
+    <string name="stat_placed">%1$d placed</string>
+    <string name="stat_skipped">%1$d skipped</string>
+    <string name="stat_check">%1$d to check</string>
+    <string name="section_keys">Setup</string>
+    <string name="section_tuning">Settings</string>
+    <string name="section_backstage">Advanced</string>
+
+    <!-- End-of-run card -->
+    <string name="sound_intro">When a run ends, a card covers the screen with the day\'s numbers: placed, skipped, to check. It makes no sound. Tap it to close it.</string>
+    <string name="toggle_scenes">Full-screen card when a run ends</string>
+    <string name="preview_title">See it</string>
+    <string name="preview_victory">Complete</string>
+    <string name="preview_drama">Stopped</string>
+    <string name="preview_only">(a preview with today\'s numbers)</string>
+    <string name="preview_only_drama">This is only a preview — nothing went wrong. A real one shows what stopped the run.</string>
+    <string name="own_victory">Your own picture for “complete”</string>
+    <string name="own_drama">Your own picture for “stopped”</string>
+    <string name="own_status">Picture: %1$s</string>
+    <string name="own_builtin_picture">Sutara (built in)</string>
+    <string name="own_yours">yours (%1$s)</string>
+    <string name="own_picture">Picture</string>
+    <string name="own_reset">Clear</string>
+    <string name="own_note">Any image or GIF on the phone; it takes Sutara\'s place on the card. Clear brings her back.</string>
+    <string name="own_picture_saved">Saved — press the preview to see it.</string>
+    <string name="own_reset_done">Back to the built-in picture.</string>
+    <string name="link_hint">https://youtu.be/…</string>
+    <string name="pick_unavailable">This phone has no file picker available.</string>
+
+    <!-- Sutara: the card on the setup screen -->
+    <string name="aakriti_title">Sutara</string>
+    <string name="aakriti_role">AI employee  ·  zero salary  ·  zero chai breaks</string>
+    <string name="aakriti_badge">Employee of the month, every month</string>
+    <string name="chat_hint">Ask Sutara…</string>
+    <string name="chat_send">Ask</string>
+    <string name="chat_you">You</string>
+
+    <!-- Sutara: her notebook -->
+    <string name="section_notebook">Sutara\'s notebook</string>
+    <string name="notebook_intro">When the Sudha app is updated and renames something, Sutara compares the new screen with the words the bot relies on and writes down the new name. She matches by meaning and spelling on the phone itself — a rule book, not a cloud AI — and when she is not sure she asks instead of guessing. Reset never clears this page.</string>
+    <string name="notebook_roster">ROSTER</string>
+    <string name="notebook_sudha">SUDHA APP</string>
+    <string name="notebook_sudha_version">Installed version: %1$s</string>
+    <string name="notebook_sudha_unknown">not read yet</string>
+    <string name="notebook_sudha_updated">Updated since she last worked with it: %1$s. She is watching for changes.</string>
+    <string name="notebook_distributor_changed">Distributor changed: was %1$s, now %2$s.</string>
+    <string name="notebook_learned">NAMES SHE HAS LEARNED</string>
+    <string name="notebook_empty">Nothing yet — the Sudha app still uses the names the bot was built with.</string>
+    <string name="notebook_entry">“%1$s”  is now  “%2$s”</string>
+    <string name="notebook_entry_meta">%1$s  ·  learned %2$s  ·  Sudha %3$s</string>
+    <string name="notebook_entry_waiting">WAITING FOR YOUR OK — not used until you allow it</string>
+    <string name="notebook_allow">Allow</string>
+    <string name="notebook_forget">Forget</string>
+    <string name="allow_title">Allow this new name?</string>
+    <string name="allow_message">Sutara thinks %1$s is now labelled “%2$s”.\n\nIf you allow it, the bot will press “%2$s” where it used to press “%3$s”. Only allow it if you have looked at the Sudha app and that is really the same button.</string>
+    <string name="notebook_last_report">LAST REPORT</string>
+    <string name="notebook_no_report">No report — nothing has stopped her yet.</string>
+    <string name="notebook_report_when">%1$s  ·  %2$s</string>
+    <string name="notebook_view_report">Read it</string>
+    <string name="notebook_share_whatsapp">Send on WhatsApp</string>
+    <string name="notebook_share_other">Share…</string>
+    <string name="notebook_forget_all">Forget what Sutara learned</string>
+    <string name="forget_all_title">Forget everything she learned?</string>
+    <string name="forget_all_message">Every learned name will be erased and the bot will look for the original labels again. Today\'s ledger is not touched. Use this only if she learned something wrong.</string>
+    <string name="forget_all_confirm">Forget</string>
+    <string name="forget_all_done">Notebook cleared. The bot is back to the original labels.</string>
+    <string name="share_subject">Sutara\'s report</string>
+    <string name="share_none">There is no report to send yet.</string>
+    <string name="share_no_whatsapp">WhatsApp is not installed — choose another app.</string>
+    <string name="share_failed">The report could not be shared.</string>
+    <string name="share_title">Send Sutara\'s report</string>
+    <string name="notify_allow_hint">Allow notifications so Sutara can tell you when the work is done or when she needs help.</string>
+
+    <!-- Sutara: notifications -->
+    <string name="notify_channel">Sutara</string>
+    <string name="notify_channel_about">Work finished, something learned, or help needed.</string>
+    <string name="notify_complete_title">Kaam complete hua!</string>
+    <string name="notify_complete_text">Aapka kaam complete hua.</string>
+    <string name="notify_learned_title">Sutara learned a new name</string>
+    <string name="notify_learned_resumed">The Sudha app renamed it. She has adapted and carried on.</string>
+    <string name="notify_learned_noted">Noted in her notebook for next time.</string>
+    <string name="notify_ask_title">Sutara needs your OK</string>
+    <string name="notify_ask_text">%1$s seems to be called “%2$s” now. She will not press it until you allow it in her notebook.</string>
+    <string name="notify_stuck_changed">Sutara is stuck — the Sudha app has changed</string>
+    <string name="notify_stuck_stopped">Sutara stopped and needs a human</string>
+    <string name="notify_stuck_row">Sutara: three retailers in a row failed</string>
+    <string name="notify_send_whatsapp">WhatsApp</string>
+    <string name="notify_send_other">Share</string>
+
+    <!-- The floating panel: Last done ID, Ask Sutara, Lock song -->
+    <string name="cd_chat">Ask Sutara</string>
+    <!-- The folded panel: a mini music player. Nothing here may mention orders or the bot. -->
+    <string name="cd_mini_art">Open</string>
+    <string name="cd_mini_play">Play or pause</string>
+    <string name="mini_idle">Retro Hindi Radio</string>
+    <string name="mini_sub">80s · 90s Hindi</string>
+    <string name="mini_loading">Loading…</string>
+    <string name="mini_paused">Paused</string>
+    <string name="mini_off">Music is switched off</string>
+    <string name="mini_idle_lines">Film dialogues</string>
+    <string name="mini_sub_lines">One for each result</string>
+    <string name="cd_lines">Songs or film dialogues</string>
+    <string name="lines_on">Auto-Dialogues on: a film dialogue after each order, a sad one after an error. No songs.</string>
+    <string name="lines_off">Auto-Dialogues off: songs again.</string>
+    <string name="panel_ask_hint">Ask Sutara… (haal? kyon ruki? skip list?)</string>
+    <string name="panel_ask_running">Sawaal type karne ke liye pehle Pause dabaiye.</string>
+    <!-- The file of skipped retailers. -->
+    <string name="button_skipped">Skipped retailers</string>
+    <string name="skipped_title">Skipped retailers (%1$d)</string>
+    <string name="skipped_none">Nobody has been skipped for an empty order list or for want of an order on T-1 to T-5.</string>
+    <string name="skipped_share">Share</string>
+    <string name="skipped_clear">Clear</string>
+    <string name="skipped_cleared">The list of skipped retailers is cleared.</string>
+    <string name="cd_song">Lock song</string>
+    <string name="cd_capture">Capture screen</string>
+    <string name="cd_hide">Hide panel</string>
+    <string name="panel_last_done_label">Last done ID</string>
+    <string name="panel_last_done_hint">2244</string>
+    <string name="start_note_empty">Empty = from the top</string>
+    <string name="start_note_typed">Start continues after %1$s</string>
+    <string name="start_note_history">Remembered %1$s (%2$s)</string>
+    <string name="start_note_reset">Reset cleared it. Was %1$s</string>
+    <string name="start_note_invalid">Numbers only, e.g. 2244</string>
+    <string name="panel_chat_working">Sir, %1$d of %2$d ho gaye: %3$d placed, %4$d skipped, %5$d to check. Kaam chal raha hai.</string>
+    <string name="panel_chat_idle">Sir, %1$d of %2$d ho gaye aaj. Start dabaiye, baaki main dekh lungi.</string>
+    <string name="panel_chat_done">Sir, poori list ho gayi: %1$d placed, %2$d skipped, %3$d to check.</string>
+    <string name="panel_chat_resume">Sir, %1$s tak ho chuka hai. Start dabate hi uske baad wale se shuru karungi.</string>
+    <string name="song_locked">Song locked: %1$s</string>
+    <string name="song_lock_waiting">Lock is on. The next song that plays will stay.</string>
+    <string name="song_unlocked">Song unlocked. Upbeat after an order, sad after an error.</string>
+
+    <!-- Setup screen: header, sections, songs -->
+    <string name="header_sub">Sutara places the daily orders for you</string>
+    <string name="today_of">%1$d of %2$d handled</string>
+    <string name="today_resume">Continues after %1$s (saved %2$s)</string>
+    <string name="today_fresh">Starts from the top of the list</string>
+    <string name="setup_done">Everything is allowed</string>
+    <string name="setup_todo">%1$d of 3 still needed</string>
+    <string name="section_songs">Music while working</string>
+    <string name="section_cues">End-of-run card</string>
+    <string name="songs_intro">Hindi film songs of the 80s and 90s, streamed from YouTube while Sutara works. Sound only, no video. An upbeat song starts with the first order and the songs keep coming while orders go through. If a retailer ends in an error the music cross-fades to a sad one, and back again at the next order. Lock song, on the floating panel, keeps the song that is playing and repeats it.</string>
+    <string name="toggle_music">Play music while working</string>
+    <string name="toggle_fast">Fast mode</string>
+    <string name="fast_note">On: when a new page has come up and is still, the bot goes on at once instead of waiting a fixed time. Placing the order and paying keep the old timing. Off: everything keeps the old timing. Takes effect at the next Start. Not yet tried on a phone: watch the first few retailers, and switch this off if anything looks wrong. With the phone\'s animations off (Developer options → Window and Transition animation scale → Off) it is a little quicker still.</string>
+    <string name="songs_happy">Your upbeat songs</string>
+    <string name="songs_sad">Your sad songs</string>
+    <string name="songs_empty">None. Songs are found on YouTube.</string>
+    <string name="songs_add_link">Add YouTube link</string>
+    <string name="songs_add_file">Add file</string>
+    <string name="songs_link_title">Link to a song</string>
+    <string name="songs_link_message">Open the song on YouTube, tap Share, Copy link, and paste it here. A direct https link to a sound file (mp3, m4a, ogg) or an internet-radio stream works too.</string>
+    <string name="songs_added">Added. Playing half a minute of it.</string>
+    <string name="songs_full">The list is full, or the song is already in it.</string>
+    <string name="songs_note">Needs internet: about 1 MB of data a minute while music plays. The app carries no songs of its own; it plays what YouTube answers for “90s bollywood dance hits” and similar searches, so a song can now and then be from another year. If the music stops working after a YouTube change, the app needs an update; ordering is not affected.</string>
+    <string name="song_now">Playing: %1$s</string>
+    <string name="song_off">Music is switched off. Turn it on in Sutara, under Music while working.</string>
+    <string name="song_problem">No music: %1$s</string>
+    <string name="song_waiting">Music starts with the first order.</string>
+    <string name="songs_finding">Finding a song on YouTube…</string>
+    <string name="songs_own_intro">Optional: your own songs. While a list below has songs, only those are played for that mood.</string>
+    <string name="songs_stop">Stop</string>
+    <string name="songs_try_happy">Try upbeat</string>
+    <string name="songs_try_sad">Try sad</string>
+    <string name="toggle_lines">Auto-Dialogues (film dialogues instead of songs)</string>
+    <string name="lines_note">On: no songs. When an order is placed a rousing Hindi film dialogue is said; when a retailer ends in an error, or the run stops, a sad or dramatic one. Each is a short clip found on YouTube on the day, heard once for at most 20 seconds; a dialogue that is still being heard is not cut short by the next order. Off: the songs again. The microphone button on the floating panel is the same switch. Which clips YouTube answers with cannot be chosen from here, so try the two buttons below first.</string>
+    <string name="lines_try_cheer">Try a rousing one</string>
+    <string name="lines_try_gloom">Try a sad one</string>
+    <string name="label_glass">Floating panel: how see-through</string>
+    <string name="glass_now">%1$d%% of what is behind shows through the open panel.</string>
+    <string name="glass_note">Left: more solid, easiest to read. Right: more see-through. The words are never thinned; they get a pale edge so they can be read over the app behind. Folded, the panel is always a bare ring with nothing inside. Takes effect the next time the panel is opened.</string>
+    <string name="songs_problem">Last problem: %1$s</string>
+    <string name="add">Add</string>
 </resources>

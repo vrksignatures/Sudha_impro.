@@ -43,8 +43,73 @@ final class ListRunner {
         this.backToTop = backToTop;
     }
 
+    // ---- Scroll memory, as SudhaAccessibilityService.scrollMemorySteps() runs it. Off
+    //      unless a test turns it on, so every older test runs the loop it always ran.
+    boolean memory;
+    /** What RunHistory keeps: the retailer and how many scrolls down it was. */
+    String savedId;
+    int savedCount;
+    com.vrksignatures.sudhaautobot.ScrollMemory.Seek seek;
+    int seekVisit = -1;
+    boolean memoryOff;
+    /** How the searches ended, in order. */
+    final List<com.vrksignatures.sudhaautobot.ScrollMemory.End> ends = new ArrayList<>();
+    /** Times the rows were read (each is a walk over the whole screen on the phone). */
+    int looks;
+    int blindScrolls, upScrolls;
+    /** A test may move the list or change the saved count just before a retailer is looked for. */
+    Runnable beforeSeek;
+
+    private boolean memorySteps(List<AccessibilityTree.RetailerRow> rows, List<String> ids) {
+        if (!memory || memoryOff) return false;
+        int visit = scroller.visit();
+        if (seekVisit != visit) {
+            seek = null;
+            if (scroller.scrolledDown() || last == null) return false;
+            seekVisit = visit;
+            if (ids.contains(last)) return false;
+            if (beforeSeek != null) beforeSeek.run();
+            int count = last.equals(savedId) ? savedCount : 0;
+            if (!com.vrksignatures.sudhaautobot.ScrollMemory.usable(count)) return false;
+            AccessibilityNodeInfo list = scroller.jumpTarget(rows);
+            if (list == null) return false;
+            seek = new com.vrksignatures.sudhaautobot.ScrollMemory.Seek(last, count);
+            for (int left = seek.burst(); left > 0; left--) {
+                if (!scroller.jump(list, true)) {
+                    seek.refused();
+                    savedId = null;
+                    break;
+                }
+                blindScrolls++;
+            }
+            return true;
+        }
+        if (seek == null || seek.over()) return false;
+        com.vrksignatures.sudhaautobot.ScrollMemory.Move move =
+                seek.next(ids, done::contains, ListScroller.snapshot(rows));
+        if (move == com.vrksignatures.sudhaautobot.ScrollMemory.Move.WAIT) return true;
+        if (move != com.vrksignatures.sudhaautobot.ScrollMemory.Move.NONE) {
+            boolean down = move == com.vrksignatures.sudhaautobot.ScrollMemory.Move.FORWARD;
+            if (scroller.jump(scroller.jumpTarget(rows), down)) {
+                if (!down) upScrolls++;
+                return true;
+            }
+            seek.refused();
+        }
+        ends.add(seek.end());
+        if (seek.end() == com.vrksignatures.sudhaautobot.ScrollMemory.End.GAVE_UP
+                || seek.end() == com.vrksignatures.sudhaautobot.ScrollMemory.End.REFUSED) {
+            memoryOff = true;
+            savedId = null;
+        }
+        return false;
+    }
+
     /** The "expected retailers" setting; by default what the list really holds. */
     int expectedCount = -1;
+    /** When set, the expected count is read off the screen (and {@link #configuredCount} is the fallback). */
+    com.vrksignatures.sudhaautobot.Roster roster;
+    int configuredCount = 125;
     boolean swept;
     int sweeps;
 
@@ -61,19 +126,35 @@ final class ListRunner {
         sequence.newVisit();
         swept = false;
         finished = false;
+        seek = null;
+        seekVisit = -1;
+        memoryOff = false;
     }
 
     void run(int maxPasses) {
         while (passes++ < maxPasses) {
             AccessibilityNodeInfo root = model.build();
+            if (roster != null) {
+                // As the service does at the top of every look: Aakriti reads the screen
+                // and the expected count follows what the app itself prints.
+                roster.see(AccessibilityTree.allText(root).toLowerCase(java.util.Locale.ROOT), "today");
+                expectedCount = roster.expected(configuredCount);
+            }
             List<AccessibilityTree.RetailerRow> rows = AccessibilityTree.retailerRows(root);
+            looks++;
             scroller.observe(rows);
 
             List<String> ids = new ArrayList<>();
             for (AccessibilityTree.RetailerRow row : rows) ids.add(row.id);
             if (!scroller.scrolledDown()) sequence.newVisit();
+            if (memorySteps(rows, ids)) continue;
             RetailerSequence.Decision decision = sequence.decide(ids, last, done::contains);
             if (decision.action == RetailerSequence.Action.OPEN) {
+                if (memory && !memoryOff) {
+                    int depth = scroller.replayableDepth();
+                    savedId = com.vrksignatures.sudhaautobot.ScrollMemory.usable(depth) ? decision.id : null;
+                    savedCount = depth;
+                }
                 // ... details, orders, copy, pay (or skip) happen here; the outcome is
                 // written to the ledger, which also makes this retailer "handled last".
                 done.add(decision.id);

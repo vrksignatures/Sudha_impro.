@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The panel's one filled button, at rest: Start. Drawn 4dp short at top and bottom: 44dp to the touch, 36dp to the eye. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#221B0F7A">
+    <item
+        android:bottom="4dp"
+        android:top="4dp">
+        <shape android:shape="rectangle">
+            <corners android:radius="12dp" />
+            <solid android:color="@color/brand" />
+        </shape>
+    </item>
+</ripple>

@@ -77,6 +77,10 @@ public final class ListScroller {
     private int depth;
     private boolean everMoved;
     private String note = "";
+    /** A drag moved the list since it was entered: the depth is then not a count of scroll actions. */
+    private boolean draggedThisVisit;
+    /** Goes up each time the list is left, so a caller can tell one visit from the next. */
+    private int visit;
 
     /** Forgets everything, including what was learned about the list. Call on START. */
     public void reset() {
@@ -97,6 +101,57 @@ public final class ListScroller {
         stuckDrags = 0;
         voidDrags = 0;
         depth = 0;
+        draggedThisVisit = false;
+        visit++;
+    }
+
+    // ------------------------------------------------- for the scroll memory
+    // Additions used by ScrollMemory only. advance() and observe() do not depend on them.
+
+    /** Which visit to the list this is; changes whenever {@link #leftList} is called. */
+    public int visit() {
+        return visit;
+    }
+
+    /**
+     * How many scroll actions it took to get here since the list was entered, or -1 when
+     * that cannot be replayed (a drag was among them, or a scroll is still being judged).
+     */
+    public int replayableDepth() {
+        return draggedThisVisit || pending != NONE ? -1 : depth;
+    }
+
+    /**
+     * The list the rows sit in, to be handed to {@link #jump}; null when there is none, when
+     * its scroll action is known to do nothing here, or while a checked scroll is under way.
+     */
+    public AccessibilityNodeInfo jumpTarget(List<AccessibilityTree.RetailerRow> rows) {
+        if (pending != NONE || actionUseless) return null;
+        return scrollableFor(rows);
+    }
+
+    /**
+     * Sends one scroll action without judging whether it worked - the caller is counting,
+     * not looking. Down counts one deeper; up one less, but never back to "not scrolled",
+     * because only the list itself can say that it is at its top.
+     *
+     * @param list what {@link #jumpTarget} returned
+     * @return false when nothing was sent (no list, or the list refused)
+     */
+    public boolean jump(AccessibilityNodeInfo list, boolean down) {
+        if (list == null || pending != NONE) return false;
+        boolean accepted;
+        try {
+            accepted = list.performAction(down
+                    ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                    : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+        } catch (Exception e) {
+            accepted = false;
+        }
+        if (!accepted) return false;
+        depth = down ? depth + 1 : Math.max(1, depth - 1);
+        note = down ? "scrolled down by count" : "scrolled up to look";
+        return true;
     }
 
     /** Android reported the last drag as cancelled (for instance a finger touched the screen). */
@@ -114,11 +169,6 @@ public final class ListScroller {
         return everMoved;
     }
 
-    /** Confirmed list movements since the current list visit began. */
-    public int confirmedScrolls() {
-        return depth;
-    }
-
     /** Short description of the last decision, for the panel and the log. */
     public String note() {
         return note;
@@ -133,6 +183,7 @@ public final class ListScroller {
         if (pending == NONE) return;
         if (snapshot(rows).equals(baseline)) return;
         if (pending == ACTION) actionProven = true;
+        if (pending == DRAG) draggedThisVisit = true;
         pending = NONE;
         rereadDone = false;
         lastDragCancelled = false;
@@ -218,7 +269,7 @@ public final class ListScroller {
     // ------------------------------------------------------------- geometry
 
     /** Which retailers are on screen and where: changes whenever the list moves at all. */
-    static String snapshot(List<AccessibilityTree.RetailerRow> rows) {
+    public static String snapshot(List<AccessibilityTree.RetailerRow> rows) {
         StringBuilder builder = new StringBuilder();
         if (rows == null) return "";
         for (AccessibilityTree.RetailerRow row : rows) {
