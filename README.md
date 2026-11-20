@@ -1,4 +1,11 @@
-# SudhaAutoBot
+# Sutara — Smart Dairy Automation
+
+> **The name.** On the phone the app, its Accessibility entry and its helper are all called
+> **Sutara** (सुतारा). It was *Sudha AutoBot* with a helper called *Aakriti* until
+> November 2026. Only what is shown on screen changed: the package
+> (`com.vrksignatures.sudhaautobot`), the class names (`Aakriti*`, `SudhaAccessibilityService`)
+> and the files on the phone are the same, so the new APK installs over the old one, stays
+> switched on in Accessibility and keeps its notebook and ledger.
 
 Accessibility-service bot that automates the repetitive daily order-entry task inside
 the third-party **Sudha Daily Orders** app (`com.sudha.dailyorders`, also seen as
@@ -8,7 +15,12 @@ The user presses **▶ START** on a floating panel; the bot then walks the whole
 list on its own, copies the most recent order from the previous 3 days, and places the
 order through the payment chain — without asking for confirmation at every step.
 
-* Java only, **zero third-party dependencies** (framework APIs only, `minSdk 24`).
+* Java only, `minSdk 24`. The bot itself uses the phone's own APIs and nothing else; two
+  libraries are added for the music alone (ExoPlayer and NewPipe Extractor, see
+  [`docs/THIRD-PARTY.md`](docs/THIRD-PARTY.md)).
+* Music while it works, streamed from YouTube as **sound only**: upbeat 80s / 90s Hindi songs
+  while orders go through, sad ones when something fails. Nothing to set up. Otherwise the
+  app is **silent**: no voice, no chime, no click — see [Look, music and scenes](#look-music-and-scenes).
 * Per-day JSON ledger so a pause, restart or crash never processes a retailer twice.
 * Pre-submit marker flushed to disk before `PLACE ORDER` so an order is never placed twice.
 
@@ -28,7 +40,7 @@ order through the payment chain — without asking for confirmation at every ste
     └── src/main
         ├── AndroidManifest.xml
         ├── java/com/vrksignatures/sudhaautobot/
-        │   ├── MainActivity.java               # setup screen + permissions + live status
+        │   ├── MainActivity.java               # the app's one screen: today, setup, settings
         │   ├── SudhaAccessibilityService.java  # the bot loop (screen state machine)
         │   ├── AccessibilityTree.java          # node search / click / scroll helpers
         │   ├── WorkflowStateMachine.java       # current state + active retailer
@@ -38,13 +50,46 @@ order through the payment chain — without asking for confirmation at every ste
         │   ├── DateRollbackPolicy.java         # the strict T-1 / T-2 / T-3 window
         │   ├── CalendarDateSelector.java       # taps one exact day in the dialog
         │   ├── FloatingPanelController.java    # overlay panel with START/PAUSE/Reset
-        │   └── RetailerPolicy.java             # exact nonblank customer IDs
+        │   ├── RetailerPolicy.java             # SMR<digits> only, never SM65 / 65
+        │   │
+        │   │   # --- carrying on where the last run stopped (docs/HISTORY-AND-MUSIC.md) ---
+        │   ├── StartPoint.java                 # the rules: today's date only, "2244" -> SMR2244
+        │   ├── RunHistory.java                 # SharedPreferences "run_history"
+        │   │
+        │   │   # --- Aakriti: adapting to renamed labels, the roster, asking for help ---
+        │   │   #     (docs/AAKRITI.md; the bot reaches her through three fenced hooks)
+        │   ├── Aakriti.java                    # coordinator: learn and carry on, or report
+        │   ├── UiVocabulary.java               # the words the bot relies on, per screen
+        │   ├── UiMolder.java                   # "has this label been renamed?" (rules)
+        │   ├── LearnedUi.java                  # the notebook of new names (survives Reset)
+        │   ├── ScreenLabels.java               # labels + pressability off the tree
+        │   ├── AccountId.java                  # SMR = retailer; SM / digits = distributor
+        │   ├── Roster.java                     # how many retailers today, who distributes
+        │   ├── AakritiNotifier.java            # done / learned / needs your OK / stuck
+        │   ├── ReportProvider.java             # hands a report to WhatsApp or any app
+        │   │
+        │   │   # --- look, music and scenes: nothing below is read by the bot loop ---
+        │   ├── MagicUi.java                    # palette, type, card, three kinds of button
+        │   ├── MusicMood.java                  # when the song changes; what is searched for
+        │   ├── SongBook.java                   # the songs found, own songs, the song lock
+        │   ├── YouTubeAudio.java               # YouTube search -> a sound-only stream
+        │   ├── MusicEngine.java                # streams and cross-fades (ExoPlayer)
+        │   ├── FeedbackCues.java               # which change of state earns a (silent) cue
+        │   ├── FeedbackPrefs.java              # the two switches, and the own picture
+        │   ├── AakritiChat.java                # her scripted answers on the setup screen
+        │   ├── AakritiDesk.java                # her card and notebook on the setup screen
+        │   ├── SceneView.java                  # the card shown when a run ends
+        │   ├── CinematicOverlay.java           # puts a scene on screen
+        │   ├── CustomMedia.java                # own picture for the end-of-run card
+        │   └── ErrorPlaybook.java              # empty: where future problems get named
         └── res/
             ├── layout/floaty_layout.xml
             ├── values/strings.xml
             ├── values/themes.xml
             ├── xml/accessibility_service_config.xml
-            └── drawable/ic_launcher.xml
+            ├── values/colors.xml               # the palette (same values as MagicUi)
+            ├── drawable-nodpi/aakriti.webp     # Aakriti's logo, the fist (source: tools/art/src/aakriti_fist.webp)
+            └── drawable/panel_*.xml, ic_*.xml  # panel shapes, line icons, launcher icon
 ```
 
 ## Build
@@ -53,7 +98,8 @@ order through the payment chain — without asking for confirmation at every ste
 
 1. Create an empty repository and push this folder to `main`.
 2. `.github/workflows/build-apk.yml` runs automatically and provisions JDK 17,
-   Gradle 8.11.1 and the Android SDK (`compileSdk 35`).
+   Gradle 8.11.1 and the Android SDK (`compileSdk 35`). The two music libraries are
+   downloaded from Google's Maven, Maven Central and JitPack.
 3. Download the APK from **Actions → Build APK → Artifacts → `SudhaAutoBot-debug`**,
    or from **Releases → latest** (`SudhaAutoBot-debug.apk`).
 
@@ -72,14 +118,15 @@ installable even though it is not release-signed.
 
 ## First-time setup on the phone
 
-1. Install the APK and open **SudhaAutoBot**.
-2. Enter the exact target package (default `com.sudha.dailyorders`) and tap **Save**.
-3. **1. Allow floating panel** → enable *Display over other apps*.
-4. **2. Enable accessibility service** → Settings → Accessibility →
-   *Installed services* → **SudhaAutoBot** → On.
-5. Open **Sudha Daily Orders** and leave it on the home screen.
-6. Tap **Show floating panel** (or return to the Sudha app; the panel persists).
-7. Press **▶ START** on the panel.
+1. Install the APK and open **Sudha AutoBot**.
+2. Under **Settings**, check the target package (default `com.sudha.dailyorders`) and tap
+   **Save settings**.
+3. Under **Setup**, three rows, each a tick once it is done: allow *Display over other
+   apps*; turn on the accessibility service (Settings → Accessibility → *Installed
+   services* → **SudhaAutoBot** → On); open **Sudha Daily Orders** and leave it on its
+   home screen.
+4. Press **Start** on the floating panel (or **Start today's orders** in the app).
+5. Music needs no setup. To switch it off: *Music while working* → the switch.
 
 On **Oppo / Vivo / Realme / Xiaomi**, additionally allow *Auto-start*, *Background
 activity* and lock the app in the recents screen; otherwise ColorOS/FuntouchOS will kill
@@ -90,41 +137,18 @@ the accessibility service mid-run.
 | Step | Screen | Action |
 | --- | --- | --- |
 | 1 | Home (`Daily Orders`) | Tap **Customers** |
-| 2 | Customer list | Count visible customer IDs; if ≤ 2, tap **Show Retailers** until the list expands (the checkbox's `isChecked()` is never read) |
-| 3 | Customer list | Read exact IDs and visible type/name; skip `(DIST)` rows and only the immediately following same-name `(Retailer)` row; follow displayed order |
-| 4 | Customer details | Verify the exact same customer ID is visible, then tap **Milk** |
+| 2 | Customer list | Count visible retailers; if ≤ 2 or no `SMR` ids, tap **Show Retailers** until ~125 rows appear (the checkbox's `isChecked()` is never read) |
+| 3 | Customer list | Scan for `SMR<digits>` only; skip distributor ids (`SM65`) and bare numbers; tap the first unprocessed row; scroll forward when all visible rows are done |
+| 4 | Customer details | Verify the header shows the **same** SMR id, then tap **Milk** |
 | 5 | Milk history | Tap the floating **+** (FAB) — physically, at its bounds centre (see below) |
 | 6 | New Order Milk | Tap **Copy Order** immediately — the form is always empty here and is never inspected |
 | 7 | Calendar | Tap the **T-1** day cell, then **OK**. Today is never selectable |
 | 8 | Calendar | If the dialog says *"No order to copy from selected date"*: tap its **OK**, then repeat with T-2, T-3, T-4, T-5 (max 5 days, never a week) |
 | 9 | Order form | When **no dialog** appears within ~3 s: assume the order loaded → mark pending → **PLACE ORDER** → **PAY** / **PROCEED** / **CONFIRM** / **OK** |
-| 10 | Success | Record `SUCCESS`, tap **Done** (or Back), return to the list, re-expand if it collapsed, continue with the next eligible customer |
+| 10 | Success | Record `SUCCESS`, tap **Done** (or Back), return to the list, re-expand if it collapsed, continue with the next SMR |
 
 When all five dates fail, the final dialog is dismissed, `GLOBAL_ACTION_BACK` leaves the
-order form, the customer is recorded as `SKIPPED_NO_DATA`, and the bot moves to the next eligible customer.
-
-### Exact IDs, eligibility and resume
-
-Customer IDs are exact nonblank strings. The bot does not add a prefix, remove internal
-characters, sort IDs or calculate a next ID. Row eligibility comes from the visible
-`(DIST)` / `(Retailer)` type and name: it skips every distributor and the immediately
-following retailer shadow only when the name matches. A later retailer with that name is
-still eligible. If the type, name or list order cannot be read safely, the bot stops.
-
-The daily ledger keeps the exact last-handled ID and an approximate count of list moves.
-On return, the bot replays that count when available and verifies the exact anchor before
-continuing below it. If the anchor is missed, it returns to the start and scans for that
-exact ID; it never substitutes the nearest visible row. The setup screen also accepts an
-optional exact **Last handled customer ID** override. Leave it blank to use saved progress.
-For a fresh run, make sure the customer list is at the top: the app cannot prove the true
-top position on every phone.
-
-### Fast mode
-
-The **Fast ON/OFF** control is available on the setup screen and floating panel. Fast only
-shortens guarded idle waits while looking for the home/list controls or waiting for the
-customer list to scroll. Copy, calendar, order and payment timing remains on the existing
-workflow waits.
+order form, the retailer is recorded as `SKIPPED_NO_DATA`, and the bot moves to the next SMR.
 
 ### The copy flow is driven entirely by the dialog
 
@@ -198,16 +222,16 @@ That is 10 physical tap attempts before the retailer is abandoned. Candidates ar
 so a wide list row or a header control can never win: position alone is only worth 50
 points and needs corroboration, while a `+` label is worth 100.
 
-If the form still never appears, the customer is recorded as **`ERROR`** in the ledger and
-the run moves on to a different eligible ID — it never walks back to "Milk" for the same
+If the form still never appears, the retailer is recorded as **`ERROR`** in the ledger and
+the run moves on to a *different* SMR id — it never walks back to "Milk" for the same
 retailer.
 
 ## Safety rules baked into the code
 
-* **Exact IDs and row eligibility.** Any nonblank ID can be used, but only a visible
-  `(Retailer)` row can be opened. `(DIST)` rows and an immediately following same-name
-  retailer shadow are skipped. A row must carry exactly one customer ID.
-* **Header must match.** Opening `Milk` requires the details screen to show the exact id
+* **Only `SMR<digits>` is ever clicked.** `RetailerPolicy` anchors the pattern, and
+  `AccessibilityTree` only treats a row as clickable when its subtree contains exactly
+  that one id.
+* **Header must match.** Opening `Milk` requires the details screen to show the same id
   that was tapped; otherwise the row is recorded as `SKIPPED_ID_MISMATCH` and the bot
   backs out.
 * **Never twice.** Any ledger record (`SUCCESS`, `SKIPPED_*`, `ERROR`) removes the
@@ -215,11 +239,17 @@ retailer.
 * **Never place twice.** Before `PLACE ORDER` the ledger is fsynced with a `pending`
   marker. A restart mid-payment refuses to re-tap `PAY` and stops for a human instead.
   That is the `IN_FLIGHT_UNVERIFIED` state shown in **MainActivity**.
+* **An empty order list is skipped, not waited on.** When Milk opens to *"Orders list is
+  empty. Retry?"* (or to the blank white page it leaves behind), the retailer is recorded as
+  skipped, Back is pressed and the next SMR is opened. `YES` and `+` are never pressed there.
+  See [`docs/REFERENCE-FLOW.md`](docs/REFERENCE-FLOW.md), §8.10.
 * **Bounded everything.** Every wait has a tick budget; `Show Retailers` is tapped at
   most 4 times, Back at most 6, the payment chain at most 12 steps. When a budget runs
   out the bot *pauses with a precise reason* instead of guessing.
 * **Package isolation.** No window outside the configured package is read or tapped.
-* **No network.** The manifest requests no `INTERNET` permission.
+* **The network is for music only.** `INTERNET` is used by `MusicEngine` and `YouTubeAudio`
+  and by nothing else; `tools/selftest` fails the build if any other class opens a
+  connection. Nothing about the orders, the retailers or the screen leaves the phone.
 
 ## Day boundary
 
@@ -229,7 +259,148 @@ day, including an in-flight marker left behind by an interrupted run — without
 half-finished order would make every later START wait for a payment screen that never
 appears.
 
+## Carrying on where the last run stopped
+
+Full write-up: [`docs/HISTORY-AND-MUSIC.md`](docs/HISTORY-AND-MUSIC.md).
+
+**Faster, and easier to check afterwards** — [`docs/SPEED-AND-STEALTH.md`](docs/SPEED-AND-STEALTH.md):
+the bot goes straight back down the list to where it was (scroll memory), goes on as soon as
+a new page has come up instead of after a fixed wait (fast mode; a switch in Settings, on by
+default, not used while an order is placed and paid for), presses PLACE ORDER as soon as the
+copied order is in the form, keeps a text list of
+the retailers it had to skip, and folds its panel into a bare see-through ring (open, the
+panel is a sheet of glass with the app visible behind it). That page also says
+why running the Sudha app out of sight is not in the app.
+
+* **The day's history.** The retailer handled last and the scroll count are saved with the
+  calendar date (`SharedPreferences` file `run_history`). They belong to that date and to
+  nothing else: when the date changes, at midnight, the whole file is wiped, however few
+  hours have passed, and the list starts from the top. No count of hours is involved.
+* **Auto-Dialogues.** A second way of working for the sound, off by default: no songs; a
+  rousing Hindi film dialogue found on YouTube when an order is placed, a sad or dramatic
+  one on an error. The microphone button on the panel, or *Music while working* in the app.
+* **"Last done ID" on the floating panel.** Shown whenever the bot is not running. Type
+  `2244`, press **Start**: SMR2244 counts as done, the bot scrolls to it and opens the
+  retailer after it. Rows above it are recorded as *done before* and are not opened.
+* **A wrong number costs time, never an order.** Nothing is recorded as done until the
+  typed retailer has actually been seen in the list. If it is never found, the bot goes
+  back to the top and opens every retailer, as it did before this feature existed.
+* **Reset** clears the history together with the day's ledger. The panel keeps a hint of
+  what the number was ("Reset cleared it. Was SMR2244") but does not use it unless it is
+  typed.
+
+## Look, music and scenes
+
+Everything in this section is presentation. The bot loop does not read any of it, and
+`tools/selftest` fails the build if that ever stops being true.
+
+**Look.** White cards on a pale grey page, one navy (the navy of Aakriti's blazer), and
+three signal colours: green done, amber waiting, red needs a look (`MagicUi`,
+`res/values/colors.xml`). Two weights of the system typeface. One filled button per screen.
+No name or mark of the maker is shown anywhere.
+
+**The app's screen.** From the top: *Today* (progress, where the next run carries on,
+**Start today's orders**), *Setup* (three rows, each a tick or an alert), Aakriti's chat;
+then, folded until tapped: her notebook, Settings, Music while working, End-of-run card,
+Advanced.
+
+**Floating panel.** Aakriti with a status light, state and retailer; a progress line;
+`Placed · Skipped · Check`; **Ask Aakriti** and **Lock song**; the message; *Last done ID*
+(only while stopped); **Start / Pause**, Reset, Capture, Hide. The bot asks the panel where
+it is each time it plans a touch, so the layout is free to change.
+
+**Music while working** — full write-up in [`docs/HISTORY-AND-MUSIC.md`](docs/HISTORY-AND-MUSIC.md).
+
+| What happens | What is heard |
+| --- | --- |
+| an order is placed | an upbeat 80s / 90s Hindi song (one already playing carries on) |
+| a retailer ends in an error | cross-fade to a sad / tense song, until the next order |
+| the run stops on a problem | a sad song for 45 s, then quiet |
+| pause, idle, list finished | fade out |
+
+* The songs are **found on YouTube and streamed as sound only** (no picture is fetched or
+  drawn), by ExoPlayer, with nothing to set up. The app carries no song and no song
+  address — only search words such as "90s bollywood dance hits hindi songs".
+* **Lock song** (the note on the panel): tap to keep the song now playing, through orders
+  and errors, on repeat; tap again to release it. Press and hold to be told which song it is.
+* Under *Music while working* in the app: the switch, what is playing (or why nothing is),
+  **Try upbeat** / **Try sad** (half a minute each) and **Stop**. Optionally, your own songs
+  per mood — a YouTube link to one song, a direct `https` sound link, or a file on the
+  phone; while a mood has own songs, only those are played for it.
+* It needs the internet (about 1 MB a minute on mobile data). Without it the bot works
+  exactly the same, in silence.
+
+**Silent otherwise.** The app has no voice, no chime and no click: there is no welcome, the
+Veena and the film lines are gone (their files are deleted, not switched off), buttons make
+no touch sound, and notifications arrive without sound or vibration. Milestones are shown,
+not heard:
+
+| Moment | On the panel | Full screen |
+| --- | --- | --- |
+| an order is placed | "Order placed" for 2½ s | — |
+| the whole list is done | "Done" | a card: "Kaam complete hua / Aapka kaam complete hua.", with the figures; also a toast and a notification |
+| the run stops on a problem | the outline turns red once | a card: "Run stopped", 6 s |
+
+**Scenes.** Shown only once the bot has stopped driving the screen, so a scene can never
+cover a button the bot is about to press or get into a picture it takes of the calendar.
+Tap anywhere to close. The picture is Aakriti; under *End-of-run card* each of the two
+cards can be given your own picture or GIF from the phone instead.
+
+## Aakriti: adapting to app updates, the roster, asking for help
+
+Full write-up: [`docs/AAKRITI.md`](docs/AAKRITI.md). In short:
+
+* **Renamed labels are learned.** If an update of the Sudha app renames something the bot
+  relies on ("Copy Order" → "Repeat Order", "Customer Details" → "Customer Info"), Aakriti
+  works out the new name from the rest of the screen, writes it in her notebook, and the
+  run carries on. This is rule-based matching on the phone (word families + spelling), not
+  a language model, and when it is not sure it does not guess.
+* **PLACE ORDER is never re-learned unasked.** A new name for it is proposed and waits for
+  **Allow** in her notebook. Nothing about the payment or success screens is ever learned.
+* **Reset keeps what she learned.** Reset clears today's ledger and counters only. Learned
+  names have their own **Forget** buttons.
+* **When she cannot adapt, she reports.** A text report (what she looked for, what she
+  found, every label on the screen) and a picture of the screen, with a notification whose
+  **WhatsApp** / **Share** buttons open the share sheet with both attached. The person
+  chooses the chat and presses send — the app cannot and does not send by itself.
+* **The roster is read, not assumed.** The number of retailers follows the app's own
+  "Total Customers" figure (125, 300, 40…); *Retailers expected today* in Settings is now
+  only the fallback. An id containing `SMR` is a retailer; one containing `SM`, or digits
+  only, is a distributor and is never opened. A change of distributor is noticed and shown.
+* **Ask her.** Her card on the app's screen answers a handful of questions (*Aaj ka haal? Kya
+  seekha? Kyon ruki? Kitne retailer? Reset se kya hoga?*). She is scripted, and says so
+  when she does not understand.
+
+### Where future error handling goes
+
+`ErrorPlaybook` is an empty list on purpose. When a new problem is reported: (1) add an
+entry there so the drama scene names it in plain words; (2) put the handling itself in
+`SudhaAccessibilityService` beside the screen it concerns, with a self-test.
+
 ## Known limitations
+
+* The look, the music and the cards have been compiled and their rules self-tested, but
+  **not watched or listened to on a phone** before release.
+* **The music depends on YouTube staying as it is.** It is found and streamed through
+  NewPipe Extractor, which reads YouTube the way a browser does; this is not an official
+  YouTube interface. When YouTube changes something, songs can stop being found until the
+  library is updated (one line in `app/build.gradle.kts`, see `docs/THIRD-PARTY.md`). The
+  app then says why under *Music while working*, stops trying for ten minutes at a time,
+  and the bot carries on without music. Using YouTube this way may also be against
+  YouTube's terms of service.
+* **"Orders list is empty"** is recognised by its words (taken from a screen recording) and,
+  once the message has faded, by the blank "New Order Milk" page lasting four seconds. The
+  rule is self-tested; the fix itself has not been watched on the phone.
+* **Typing on the floating panel** needs the panel's window to take the keyboard for a
+  moment. That is standard Android, but some phones (Oppo, Vivo, Xiaomi) treat overlay
+  windows in their own way; if the keyboard does not appear, that is the place to look
+  (`FloatingPanelController.beginEditing`).
+* A song that has not started after 25 s, or fails, is skipped; nothing about the run
+  waits for it.
+* Aakriti adapts to **renamed labels**. A redesign that changes the flow itself (a new
+  step, a button without text, a different order of screens) is beyond her: she stops and
+  reports. Her matching has been tested against invented renames, not against a real
+  update of the Sudha app, because there has not been one yet.
 
 * Screen recognition is text-based (`daily order`, `show retailers`, `customer details`,
   `new order milk`, `no order to copy from selected date`, `place order`, `payment`, …). If your build of the target

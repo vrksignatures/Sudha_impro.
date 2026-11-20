@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Launcher icon on Android 8 and later: Aakriti in the middle of a pale backdrop.
+  The layers are 108dp; the launcher shows the middle 72dp and cuts it to its own shape, so
+  she is drawn 64dp across to stay whole in every shape.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_bg" />
+    <foreground>
+        <inset
+            android:drawable="@drawable/aakriti"
+            android:inset="22dp" />
+    </foreground>
+</adaptive-icon>

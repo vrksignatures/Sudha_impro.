@@ -14,6 +14,7 @@ public class AccessibilityNodeInfo {
     public static final int ACTION_CLICK = 0x10;
     public static final int ACTION_ACCESSIBILITY_FOCUS = 0x40;
     public static final int ACTION_SCROLL_FORWARD = 0x1000;
+    public static final int ACTION_SCROLL_BACKWARD = 0x2000;
 
     /** Receives performAction calls so a model can react like the real widget would. */
     public interface ActionHandler {

@@ -30,7 +30,7 @@ import java.util.Locale;
  * The bot. One tick per UI change (plus debounced retries) walks this machine:
  *
  * <pre>
- * HOME --"Customers"--> RETAILER_LIST --[ensure expanded]--> click an eligible customer
+ * HOME --"Customers"--> RETAILER_LIST --[ensure expanded]--> click an unprocessed SMR
  *   --> DETAILS --"Milk"--> HISTORY --"+"--> ORDER FORM --"Copy Order"--> CALENDAR
  *   --> pick T-1/T-2/T-3 --> items?>0 --> PLACE ORDER --> PAY/PROCEED/CONFIRM/OK
  *   --> SUCCESS ("Done"/"OK"/BACK) --> RETAILER_LIST (re-expand if collapsed) --> ...
@@ -40,8 +40,8 @@ import java.util.Locale;
  * <ul>
  *   <li><b>Package isolation.</b> Nothing is read or tapped unless the window belongs
  *       to the configured package.</li>
- *   <li><b>Strict identity.</b> Customer IDs are kept as exact nonblank strings, and
- *       the details screen must show the same ID before "Milk" is opened.</li>
+ *   <li><b>Strict identity.</b> Only {@code SMR<digits>} tokens are ever clicked, and
+ *       the details screen must show the same id before "Milk" is opened.</li>
  *   <li><b>No duplicates.</b> Any ledger record removes the retailer from today's
  *       queue; a pre-submit "pending" marker is flushed to disk before PLACE ORDER.</li>
  *   <li><b>Bounded retries.</b> Every wait has a tick budget; when it runs out the run
@@ -58,6 +58,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
     /** Read-only: dumps the current screen tree to a file. Safe while paused or running. */
     public static final String ACTION_CAPTURE = "com.vrksignatures.sudhaautobot.action.CAPTURE";
     public static final String ACTION_SHARE_CAPTURE = "com.vrksignatures.sudhaautobot.action.SHARE_CAPTURE";
+    public static final String ACTION_STOP_ALARM = "com.vrksignatures.sudhaautobot.action.STOP_ALARM";
 
     // Timing. Oppo/Vivo mid-range devices repaint slowly, so these are generous.
     private static final long DEBOUNCE_MS = 320;
@@ -135,19 +136,17 @@ public final class SudhaAccessibilityService extends AccessibilityService {
     private final WorkflowStateMachine workflow = new WorkflowStateMachine();
 
     private DailyLedger ledger;
+    private AlarmController alarmController;
+    private int preShowRetailersTotal = -1;
+    private int networkRetryCount = 0;
+    private int filterCheckDoneVisit = -1;
     private FloatingPanelController panel;
     private SharedPreferences prefs;
 
     private String targetPackage = "";
     private int expectedCount = RetailerPolicy.EXPECTED_RETAILER_COUNT;
-    private String manualResumeAnchor;
-    private String runResumeAnchor;
-    private boolean manualAnchorOverride;
-    private boolean listVisitStarted;
-    private int replayStepsRemaining;
-    private int replayLastDepth;
-    private boolean usedSavedPosition;
-    private boolean fallbackScanActive;
+    /** The figure from the setup screen; used when the app itself prints no total. */
+    private int configuredCount = RetailerPolicy.EXPECTED_RETAILER_COUNT;
 
     private boolean running;
     private boolean receiverRegistered;
@@ -349,7 +348,9 @@ public final class SudhaAccessibilityService extends AccessibilityService {
 
     private final Runnable stepRunnable = this::step;
     private final Runnable debouncedStep = () -> {
-        if (running) scheduleStep(DEBOUNCE_MS);
+        // While a timed sequence of the bot's own is under way (see quick()), the next look
+        // is already booked; a change on the screen must not push it back.
+        if (running && System.currentTimeMillis() >= this.quietUntil) scheduleStep(DEBOUNCE_MS);
     };
 
     private final BroadcastReceiver controlReceiver = new BroadcastReceiver() {
@@ -370,6 +371,8 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                 captureScreen(true);
             } else if (ACTION_SHARE_CAPTURE.equals(action)) {
                 shareLatestCapture();
+            } else if (ACTION_STOP_ALARM.equals(action)) {
+                stopAlarm();
             }
         }
     };
@@ -382,8 +385,10 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         prefs = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
         reloadConfig();
         ledger = new DailyLedger(this);
+        alarmController = new AlarmController(this);
         registerControlReceiver();
         applyServiceInfo();
+        dayWatchBegin();
         workflow.setListener((state, retailerId, message) -> refreshPanel());
         ensurePanel();
         refreshPanel();
@@ -403,6 +408,16 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             if (AppNotices.isAlreadyOrdered(said)) {
                 Log.i(TAG, "Toast from " + packageName + ": " + said);
                 onAlreadyOrdered(said);
+            } else if (said.toLowerCase(Locale.ROOT).contains("failed to connect")
+                    || said.toLowerCase(Locale.ROOT).contains("internal error")) {
+                Log.w(TAG, "Network/Server toast from " + packageName + ": " + said);
+                onNetworkOrUnknownRetry("App toast: " + said);
+            } else if (AppNotices.isEmptyOrderList(said)
+                    && RetailerPolicy.isRetailerId(workflow.retailerId())) {
+                // The same message, on a build that shows it as a toast instead of a bar.
+                // Only with a retailer open: a toast alone does not say which page is up.
+                Log.i(TAG, "Toast from " + packageName + ": " + said);
+                onEmptyOrderList(said, false);
             }
             return;
         }
@@ -410,6 +425,8 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         // Collapse the event storm into a single delayed inspection.
         handler.removeCallbacks(debouncedStep);
         handler.postDelayed(debouncedStep, DEBOUNCE_MS);
+        // Fast mode: also peek at the screen as soon as it has stopped changing.
+        tempoChanged(event);
     }
 
     /** The words carried by an event (for a toast: its message). */
@@ -436,7 +453,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
     /**
      * The app has said "Today Order already created": the retailer in hand already has
      * today's order. There is nothing to wait for - no payment screen is coming - so the
-     * customer is recorded as done and the bot leaves at once for the next eligible row.
+     * retailer is recorded as done and the bot leaves at once for the next SMR.
      *
      * <p>Before this existed the bot never saw the message (it is a toast), kept waiting
      * for the payment screen, and finally stopped the whole run with "never reached a
@@ -480,11 +497,111 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         backSteps = 1;
         relaunches = 0;
         workflow.moveTo(BotState.RETURNING_TO_LIST,
-                retailerId + " already has today's order; going to the next eligible customer");
+                retailerId + " already has today's order; going to the next SMR");
         refreshPanel();
         performGlobalAction(GLOBAL_ACTION_BACK);
         lastActionAt = System.currentTimeMillis();
         next(ACTION_DELAY_MS);
+    }
+
+    // ------------------------------------------------ "Orders list is empty"
+
+    /** How long the white order page has to stay white before it is taken as empty. */
+    private static final long BLANK_ORDER_LIST_MS = 4000;
+    private static final int MIN_BLANK_ORDER_LIST_TICKS = 3;
+    private long blankOrderListSince;
+    private int blankOrderListTicks;
+
+    /**
+     * Step 1c of {@link #inspect}: the retailer's order page says "Orders list is empty.
+     * Retry?", or is the white page that message leaves behind.
+     *
+     * @return true when this screen was dealt with here (the caller must do nothing more)
+     */
+    private boolean leavesEmptyOrderList(String text) {
+        // An order that may already be on its way is never abandoned from here; that case
+        // has its own, stricter handler (step 5).
+        if (ledger == null || pendingRecovery || ledger.hasPending()) return false;
+        if (AppNotices.isEmptyOrderList(text)) {
+            return onEmptyOrderList("Orders list is empty. Retry?", false);
+        }
+        if (!AppNotices.isBlankOrderList(text)) {
+            blankOrderListSince = 0;
+            blankOrderListTicks = 0;
+            return false;
+        }
+        // White page, no message (it lasts about three seconds and may have been missed).
+        // The page also looks like this for a moment while it opens, so it has to stay.
+        long now = System.currentTimeMillis();
+        if (blankOrderListSince <= 0) blankOrderListSince = now;
+        blankOrderListTicks++;
+        if (now - blankOrderListSince < BLANK_ORDER_LIST_MS
+                || blankOrderListTicks < MIN_BLANK_ORDER_LIST_TICKS) {
+            workflow.moveTo(workflow.state(), "The order list looks empty; checking once more");
+            refreshPanel();
+            next(FAST_DELAY_MS);
+            return true;
+        }
+        return onEmptyOrderList("the order page stayed empty", true);
+    }
+
+    /**
+     * The app has said "Orders list is empty. Retry?" for the retailer in hand: there is
+     * no earlier order to copy. Nothing is waited for and YES (retry) is not pressed. The
+     * retailer is put on record as skipped and the bot leaves at once: Back, as many times
+     * as it takes to reach the customer list, Show Retailers again, then the next SMR.
+     *
+     * <p>Before this existed the white page matched none of the screens the bot knows, so
+     * it waited on "a recognised Sudha screen" and then stopped the whole run.</p>
+     *
+     * @param blankPage true when the page was only seen empty, without the message
+     * @return true when the bot is now on its way back to the list
+     */
+    private boolean onEmptyOrderList(String said, boolean blankPage) {
+        if (!running || ledger == null) return false;
+        // Already on the way out (for instance the message was seen twice).
+        if (returningToRetailerList) return false;
+        if (pendingRecovery || ledger.hasPending()) return false;
+        String retailerId = workflow.retailerId();
+        boolean known = RetailerPolicy.isRetailerId(retailerId);
+        // The outcome of a retailer already on record is left as it is.
+        if (known && !ledger.isProcessed(retailerId)) {
+            String note = blankPage
+                    ? "The order list stayed empty; nothing to copy"
+                    : "The app said: " + said + " Nothing to copy";
+            // record() also clears this retailer's in-flight marker.
+            if (!ledger.record(retailerId, LedgerStatus.SKIPPED_NO_HISTORY, note)) {
+                fail("Could not record the empty order list for " + retailerId);
+                return true;
+            }
+            skipLog(retailerId, SkipLine.EMPTY_LIST, note);
+        }
+        Log.i(TAG, (known ? retailerId : "No retailer in hand") + ": order list is empty (" + said
+                + "); going back to the list");
+        blankOrderListSince = 0;
+        blankOrderListTicks = 0;
+        lastClickedRetailerId = null;
+        sameRetailerClickCount = 0;
+        resetCopyFlow();
+        unknownTicks = 0;
+        detailsTicks = 0;
+        historyTicks = 0;
+        popupDismissTicks = 0;
+        awaitingRetryAfterPopup = false;
+        workflow.clearRetailer();
+
+        handler.removeCallbacks(debouncedStep);
+        returningToRetailerList = true;
+        backSteps = 1;
+        relaunches = 0;
+        workflow.moveTo(BotState.RETURNING_TO_LIST,
+                (known ? retailerId + ": order list is empty" : "Order list is empty")
+                        + "; going to the next SMR");
+        refreshPanel();
+        performGlobalAction(GLOBAL_ACTION_BACK);
+        lastActionAt = System.currentTimeMillis();
+        next(ACTION_DELAY_MS);
+        return true;
     }
 
     @Override
@@ -510,6 +627,8 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             }
             receiverRegistered = false;
         }
+        if (alarmController != null) alarmController.stopAlarm();
+        dayWatchEnd();
         detachPanel();
         super.onDestroy();
     }
@@ -523,6 +642,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         filter.addAction(ACTION_SHOW_PANEL);
         filter.addAction(ACTION_CAPTURE);
         filter.addAction(ACTION_SHARE_CAPTURE);
+        filter.addAction(ACTION_STOP_ALARM);
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(controlReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -563,13 +683,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                 RetailerPolicy.EXPECTED_RETAILER_COUNT);
         expectedCount = configured < 1 || configured > 2000
                 ? RetailerPolicy.EXPECTED_RETAILER_COUNT : configured;
-        manualResumeAnchor = RetailerPolicy.normalize(
-                prefs.getString(MainActivity.KEY_LAST_HANDLED_ID, ""));
-    }
-
-    private long guardedIdleDelay() {
-        return prefs != null && prefs.getBoolean(MainActivity.KEY_FAST_MODE, false)
-                ? FAST_DELAY_MS : IDLE_DELAY_MS;
+        configuredCount = expectedCount;
     }
 
     // ---------------------------------------------------------------- control
@@ -585,7 +699,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             return;
         }
         if (!Settings.canDrawOverlays(this)) {
-            workflow.fail("Allow \"display over other apps\" for SudhaAutoBot");
+            workflow.fail("Allow \"display over other apps\" for Sutara");
             refreshPanel();
             return;
         }
@@ -596,19 +710,10 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         if (!ledger.sessionDate().equals(LocalDate.now())) {
             ledger = new DailyLedger(this);
         }
+        startPointAtStart();
+        tempoAtStart();
 
         resetRunCounters();
-        manualAnchorOverride = RetailerPolicy.isRetailerId(manualResumeAnchor);
-        runResumeAnchor = manualAnchorOverride ? manualResumeAnchor : ledger.lastHandledId();
-        replayStepsRemaining = 0;
-        replayLastDepth = 0;
-        usedSavedPosition = false;
-        fallbackScanActive = false;
-        if (RetailerPolicy.isRetailerId(runResumeAnchor)
-                && runResumeAnchor.equals(prefs.getString(MainActivity.KEY_SCROLL_MEMORY_ID, ""))) {
-            replayStepsRemaining = Math.max(0, prefs.getInt(MainActivity.KEY_SCROLL_MEMORY_STEPS, 0));
-            usedSavedPosition = replayStepsRemaining > 0;
-        }
         running = true;
         runStartedAt = System.currentTimeMillis();
 
@@ -620,10 +725,19 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             workflow.moveTo(BotState.PAYMENT,
                     "Resuming in-flight order " + pendingId + " (no duplicate submission)");
         } else {
+            if (alarmController != null) alarmController.stopAlarm();
+            if (panel != null) panel.setAlarmActive(false);
+            networkRetryCount = 0;
             pendingRecovery = false;
             workflow.clearRetailer();
-            workflow.reset("Starting from the home screen");
-            workflow.moveTo(BotState.HOME, "Looking for the Daily Orders home screen");
+            workflow.reset("Detecting current screen...");
+            AccessibilityNodeInfo currentRoot = resolveRoot();
+            String currentText = currentRoot == null ? "" : AccessibilityTree.allText(currentRoot).toLowerCase(Locale.ROOT);
+            if (looksLikeRetailerListText(currentText)) {
+                workflow.moveTo(BotState.RETAILER_LIST, "On Customers list; starting immediately");
+            } else {
+                workflow.moveTo(BotState.HOME, "Open Customers screen in Sudha Daily Orders");
+            }
         }
         refreshPanel();
         scheduleStep(FAST_DELAY_MS);
@@ -646,6 +760,453 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         workflow.fail(reason);
         refreshPanel();
         Log.w(TAG, "Stopped: " + reason);
+        aakritiAfterStop(reason);
+        if (!Aakriti.recovering()) {
+            if (alarmController != null) alarmController.startHighVolumeAlarm();
+            if (panel != null) panel.setAlarmActive(true);
+        }
+    }
+
+    private void stopAlarm() {
+        if (alarmController != null) alarmController.stopAlarm();
+        if (panel != null) panel.setAlarmActive(false);
+        networkRetryCount = 0;
+        workflow.pause("Alarm silenced — review screen then tap START");
+        refreshPanel();
+    }
+
+    /** Section 9: Retry network/unknown errors up to 5 times, then halt + high-volume alarm. */
+    private void onNetworkOrUnknownRetry(String detail) {
+        if (!running) return;
+        networkRetryCount++;
+        Log.w(TAG, "Retry " + networkRetryCount + "/5: " + detail);
+        if (networkRetryCount >= 5) {
+            fail("Failed after 5 retries: " + detail);
+            return;
+        }
+        AccessibilityNodeInfo root = resolveRoot();
+        if (root != null) tapDialogOk(root);
+        workflow.moveTo(workflow.state(), "Network/server retry (" + networkRetryCount + "/5): " + detail);
+        refreshPanel();
+        next(1800L);
+    }
+
+    // ------------------------------------------------------------ start point
+    // The day's history and the panel's "Last done ID" box (see RunHistory, StartPoint).
+    // They only tell the ledger which retailer to carry on after; choosing and opening the
+    // next retailer is still RetailerSequence's job. Each call is fenced: if one fails,
+    // the run goes on exactly as it did before they were added.
+
+    /** Follows the bot down the list to a start point; null when there is none. */
+    private StartPoint.Seeker startSeeker;
+
+    // The history belongs to one calendar date. Android says when the date changes
+    // (midnight, or the clock or the time zone being set), and the history is wiped then
+    // and there. An addition, fenced: without it the wipe still happens at the next look.
+    private boolean dayWatching;
+    private final BroadcastReceiver dayWatch = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            dayTurned();
+        }
+    };
+    private final Runnable dayTick = this::dayTurned;
+
+    private void dayWatchBegin() {
+        try {
+            RunHistory.expire(this);
+            if (!dayWatching) {
+                IntentFilter filter = new IntentFilter();
+                filter.addAction(Intent.ACTION_DATE_CHANGED);
+                filter.addAction(Intent.ACTION_TIME_CHANGED);
+                filter.addAction(Intent.ACTION_TIMEZONE_CHANGED);
+                if (Build.VERSION.SDK_INT >= 33) {
+                    registerReceiver(dayWatch, filter, Context.RECEIVER_NOT_EXPORTED);
+                } else {
+                    registerReceiver(dayWatch, filter);
+                }
+                dayWatching = true;
+            }
+            dayTickBook();
+        } catch (Throwable e) {
+            Log.w(TAG, "Day watch not started", e);
+        }
+    }
+
+    /** A second trigger for phones that are late with the broadcast: a timer set for just after midnight. */
+    private void dayTickBook() {
+        handler.removeCallbacks(dayTick);
+        handler.postDelayed(dayTick, StartPoint.untilMidnight(System.currentTimeMillis(),
+                java.util.TimeZone.getDefault()) + 1500L);
+    }
+
+    private void dayTurned() {
+        try {
+            if (RunHistory.expire(this)) {
+                Log.i(TAG, "The date changed: the day's history is cleared");
+                // A run that is going on keeps its place; only what was remembered for
+                // the next START is gone.
+                if (!running) startSeeker = null;
+                if (panel != null) refreshPanel();
+            }
+            dayTickBook();
+        } catch (Throwable e) {
+            Log.w(TAG, "Day watch skipped", e);
+        }
+    }
+
+    private void dayWatchEnd() {
+        try {
+            handler.removeCallbacks(dayTick);
+            if (dayWatching) unregisterReceiver(dayWatch);
+        } catch (Throwable ignored) {
+        }
+        dayWatching = false;
+    }
+
+    /** START: a number typed in the box (or today's remembered place) becomes "handled last". */
+    private void startPointAtStart() {
+        try {
+            startSeeker = RunHistory.atStart(this, ledger, startSeeker);
+        } catch (Throwable e) {
+            Log.w(TAG, "Start point skipped", e);
+        }
+    }
+
+    /** The retailer list is on screen: rows above the start point are noted, not opened. */
+    private void startPointSees(List<String> idsOnScreen) {
+        if (startSeeker == null) return;
+        try {
+            startSeeker = RunHistory.sees(this, ledger, startSeeker, idsOnScreen);
+        } catch (Throwable e) {
+            startSeeker = null;
+            Log.w(TAG, "Start point skipped", e);
+        }
+    }
+
+    /** Remembers, with the time, the retailer handled last. */
+    private void startPointNote() {
+        try {
+            RunHistory.note(this, ledger);
+        } catch (Throwable e) {
+            Log.w(TAG, "History not saved", e);
+        }
+    }
+
+    /** Reset clears the history as well as the ledger. */
+    private void startPointForget() {
+        try {
+            startSeeker = null;
+            RunHistory.forget(this);
+        } catch (Throwable e) {
+            Log.w(TAG, "History not cleared", e);
+        }
+    }
+
+    // ----------------------------------------------------------- scroll memory
+    // An addition (see ScrollMemory.java). Which retailer is opened is still decided by
+    // RetailerSequence from the rows on screen; this only brings the list to the right
+    // place faster. Fenced: when it has nothing to say, fails, or is refused, the list is
+    // read exactly as before.
+
+    private ScrollMemory.Seek scrollSeek;
+    private int scrollSeekVisit = -1;
+    /** The counted scrolls are being sent; nothing is read until they are done. */
+    private boolean scrollBursting;
+    private long scrollBurstDeadline;
+    /** A search failed in this run: the memory is left alone until the next START. */
+    private boolean scrollMemoryOff;
+    /** Pause between two counted scrolls; 0 until read from the settings. */
+    private long scrollGapMs;
+
+    private long scrollGap() {
+        if (scrollGapMs <= 0) {
+            scrollGapMs = ScrollMemory.nextGap(getSharedPreferences(COPY_PREFS, MODE_PRIVATE)
+                    .getLong(SCROLL_GAP, ScrollMemory.BLIND_GAP_MS), ScrollMemory.End.NOT_ENDED);
+        }
+        return scrollGapMs;
+    }
+
+    private void scrollMemoryReset() {
+        scrollSeek = null;
+        scrollSeekVisit = -1;
+        scrollBursting = false;
+        scrollMemoryOff = false;
+        quietUntil = 0;
+    }
+
+    /** A retailer is about to be opened: remember how many scrolls down the list it is. */
+    private void scrollMemoryNote(String retailerId) {
+        try {
+            if (scrollMemoryOff) return;
+            RunHistory.noteScroll(this, retailerId, listScroller.replayableDepth());
+        } catch (Throwable e) {
+            Log.w(TAG, "Scroll count not saved", e);
+        }
+    }
+
+    /**
+     * The expanded retailer list is on screen. At the top of a freshly opened list, with a
+     * count saved for the retailer handled last, the counted scrolls are sent without
+     * reading the rows; then the rows are read, with a look around if the retailer is not
+     * where the count said.
+     *
+     * @return true when this pass was used up here (the caller must do nothing more)
+     */
+    private boolean scrollMemorySteps(List<AccessibilityTree.RetailerRow> rows, List<String> ids) {
+        try {
+            if (scrollMemoryOff || ledger == null) return false;
+            long now = System.currentTimeMillis();
+            if (scrollBursting) {
+                if (now < scrollBurstDeadline) {
+                    // Still counting. Make sure a look is booked for when it should be over.
+                    handler.removeCallbacks(stepRunnable);
+                    handler.postDelayed(stepRunnable, scrollBurstDeadline - now + 50);
+                    return true;
+                }
+                // The burst never reported back. Give the list to the ordinary scan.
+                scrollBursting = false;
+                if (scrollSeek != null) scrollSeek.refused();
+            }
+            int visit = listScroller.visit();
+            if (scrollSeekVisit != visit) {
+                scrollSeek = null;
+                // Only from the top, and never while a typed start point is being followed
+                // down: that one has to see every row on the way.
+                if (startSeeker != null || listScroller.scrolledDown()) return false;
+                String last = ledger.lastHandledId();
+                if (last == null) return false;
+                scrollSeekVisit = visit;
+                if (ids.contains(last)) return false;
+                int count = RunHistory.scrollCount(this, last);
+                if (!ScrollMemory.usable(count)) return false;
+                AccessibilityNodeInfo list = listScroller.jumpTarget(rows);
+                if (list == null) return false;
+                scrollSeek = new ScrollMemory.Seek(last, count);
+                final ScrollMemory.Seek seek = scrollSeek;
+                final int scrolls = seek.burst();
+                scrollBursting = true;
+                scrollBurstDeadline = now + scrolls * scrollGap() + 4000;
+                quietUntil = scrollBurstDeadline;
+                handler.removeCallbacks(stepRunnable);
+                handler.removeCallbacks(debouncedStep);
+                // A look is booked for the latest the counting can take, in case it is cut short.
+                handler.postDelayed(stepRunnable, scrollBurstDeadline - now + 50);
+                Log.i(TAG, "Scroll memory: " + scrolls + " scrolls down to " + last);
+                workflow.moveTo(BotState.RETAILER_LIST, "Going straight down " + scrolls
+                        + " scrolls to " + last + " (done last)");
+                refreshPanel();
+                scrollBurst(list, seek, scrolls);
+                return true;
+            }
+            if (scrollSeek == null || scrollSeek.over()) return false;
+
+            ScrollMemory.Move move = scrollSeek.next(ids, ledger::isProcessed, ListScroller.snapshot(rows));
+            if (move == ScrollMemory.Move.WAIT) {
+                quick(ScrollMemory.LOOK_GAP_MS);
+                return true;
+            }
+            if (move == ScrollMemory.Move.FORWARD || move == ScrollMemory.Move.BACK) {
+                boolean down = move == ScrollMemory.Move.FORWARD;
+                if (listScroller.jump(listScroller.jumpTarget(rows), down)) {
+                    lastActionAt = now;
+                    workflow.moveTo(BotState.RETAILER_LIST, scrollSeek.id + " is not where the count said; looking "
+                            + (down ? "below" : "above"));
+                    refreshPanel();
+                    quick(scrollSeek.blind() ? scrollGap() : ScrollMemory.LOOK_GAP_MS);
+                    return true;
+                }
+                scrollSeek.refused();
+            }
+            ScrollMemory.End end = scrollSeek.end();
+            Log.i(TAG, "Scroll memory for " + scrollSeek.id + ": " + end);
+            long gap = ScrollMemory.nextGap(scrollGap(), end);
+            if (gap != scrollGapMs) {
+                // The counted scrolls fell short: they are sent further apart from now on.
+                scrollGapMs = gap;
+                getSharedPreferences(COPY_PREFS, MODE_PRIVATE).edit().putLong(SCROLL_GAP, gap).apply();
+            }
+            if (end == ScrollMemory.End.GAVE_UP || end == ScrollMemory.End.REFUSED) {
+                // The count led nowhere. The ordinary scan takes over, and the memory is
+                // not used again in this run.
+                scrollMemoryOff = true;
+                RunHistory.noteScroll(this, null, 0);
+            }
+            return false;
+        } catch (Throwable e) {
+            Log.w(TAG, "Scroll memory skipped", e);
+            scrollBursting = false;
+            scrollMemoryOff = true;
+            return false;
+        }
+    }
+
+    /** Sends the counted scrolls, one every {@link #scrollGap()} ms, reading nothing. */
+    private void scrollBurst(final AccessibilityNodeInfo list, final ScrollMemory.Seek seek, final int left) {
+        try {
+            if (!running || seek != scrollSeek || !scrollBursting) return;
+            if (left <= 0) {
+                scrollBursting = false;
+                quick(ScrollMemory.LOOK_GAP_MS);
+                return;
+            }
+            if (!listScroller.jump(list, true)) {
+                // The list would not take it (its end came sooner than the count said).
+                // Forget the count, read the rows and carry on the ordinary way.
+                scrollBursting = false;
+                seek.refused();
+                RunHistory.noteScroll(this, null, 0);
+                quick(ScrollMemory.LOOK_GAP_MS);
+                return;
+            }
+            lastActionAt = System.currentTimeMillis();
+            handler.postDelayed(() -> scrollBurst(list, seek, left - 1), scrollGap());
+        } catch (Throwable e) {
+            Log.w(TAG, "Scroll memory stopped", e);
+            scrollBursting = false;
+            scrollMemoryOff = true;
+            next(ACTION_DELAY_MS);
+        }
+    }
+
+    // ------------------------------------------------------ skipped-retailer log
+    // An addition: a text file the person can read later (see SkipLog.java). The bot never
+    // reads it, and a failure to write it changes nothing.
+
+    private void skipLog(String retailerId, String kind, String note) {
+        try {
+            SkipLog.add(this, retailerId, kind, note);
+        } catch (Throwable e) {
+            Log.w(TAG, "Skipped-retailer log not written", e);
+        }
+    }
+
+    // ------------------------------------------------- the copied order, quickly
+    // An addition (see CopyOutcome.java). The rule is unchanged - no error dialog means the
+    // copy worked - but instead of always waiting about three seconds for a dialog that may
+    // not come, the form is looked at every 150 ms, and the wait ends as soon as the form
+    // has been rewritten. If it never is, the old wait applies in full.
+
+    private static final String COPY_PREFS = "copy_outcome";
+    private static final String COPY_DISTRUST_AT = "distrust_at";
+    private static final String SCROLL_GAP = "scroll_gap_ms";
+    private static final long COPY_DISTRUST_MS = 24L * 60 * 60 * 1000;
+
+    /** Everything written on the order form just before Copy Order was pressed. */
+    private String formBeforeCopy = "";
+    private CopyOutcome.Watch copyWatch;
+
+    private void copyOutcomeBefore(String formText) {
+        formBeforeCopy = formText == null ? "" : formText;
+        copyWatch = null;
+    }
+
+    /** The calendar's OK has just been pressed: a new wait begins. */
+    private void copyOutcomeBegins() {
+        copyWatch = null;
+    }
+
+    private boolean copyOutcomeTrusted() {
+        long at = getSharedPreferences(COPY_PREFS, MODE_PRIVATE).getLong(COPY_DISTRUST_AT, 0);
+        long age = System.currentTimeMillis() - at;
+        return at <= 0 || age < 0 || age > COPY_DISTRUST_MS;
+    }
+
+    /**
+     * No error dialog is on screen. Decides whether to keep waiting for one.
+     *
+     * @return true to wait (the next look is already booked); false to go on to PLACE ORDER
+     */
+    private boolean copyOutcomeWaits(AccessibilityNodeInfo root, String formText) {
+        try {
+            long now = System.currentTimeMillis();
+            if (copyWatch == null) {
+                // The same length as the wait this replaces (the look after OK, then three more).
+                copyWatch = new CopyOutcome.Watch(copyOutcomeTrusted() ? formBeforeCopy : "",
+                        (COPY_SETTLE_TICKS + 1) * ACTION_DELAY_MS);
+            }
+            boolean canPlace = hasPlaceOrder(root) && !CalendarDateSelector.isCalendar(root);
+            CopyOutcome.Verdict verdict = copyWatch.look(formText, canPlace, now);
+            if (verdict == CopyOutcome.Verdict.WAIT) {
+                quick(CopyOutcome.POLL_MS);
+                return true;
+            }
+            Log.i(TAG, "Copy result: " + verdict);
+            return false;
+        } catch (Throwable e) {
+            Log.w(TAG, "Quick copy check skipped", e);
+            return false;
+        }
+    }
+
+    /**
+     * The error dialog is on screen. If the form had been seen rewritten before it came,
+     * the quick check misjudged this app, and it is not used again for a day.
+     */
+    private void copyOutcomeRefused() {
+        try {
+            if (copyWatch != null && copyWatch.sawChange()) {
+                Log.w(TAG, "The form changed and the error dialog still came; quick copy check off for a day");
+                getSharedPreferences(COPY_PREFS, MODE_PRIVATE).edit()
+                        .putLong(COPY_DISTRUST_AT, System.currentTimeMillis()).apply();
+            }
+            copyWatch = null;
+        } catch (Throwable e) {
+            Log.w(TAG, "Quick copy check note skipped", e);
+        }
+    }
+
+    // ---------------------------------------------------------------- Aakriti
+    // The three places the bot talks to Aakriti (see Aakriti.java). She reads; she never
+    // presses anything in the Sudha app. Each call is fenced: if she fails, nothing here
+    // behaves differently from before she was added.
+
+    private Aakriti aakriti() {
+        return Aakriti.with(this);
+    }
+
+    /**
+     * After a stop has fully happened, Aakriti studies the screen. If the stop was a label
+     * the app has renamed and she worked out the new name, the run is started again by the
+     * same code the START button runs - a moment later, and only if nobody has touched
+     * anything in between. Otherwise she writes a report for a person.
+     */
+    private void aakritiAfterStop(String reason) {
+        try {
+            if (!aakriti().afterStop(this, resolveRoot(), reason)) return;
+            handler.postDelayed(() -> {
+                if (!running && workflow.state() == BotState.ERROR) startRun();
+            }, 1500);
+        } catch (Throwable e) {
+            Log.w(TAG, "Aakriti could not look at the stop", e);
+        }
+    }
+
+    /**
+     * Aakriti reads the screen the bot is about to judge. Returns the text to judge: the
+     * same string, unless a label she has learned a new name for had to be put back. Also
+     * settles how many retailers to expect - the app's own "Total Customers" figure when it
+     * prints one, otherwise the figure from the setup screen as before.
+     */
+    private String aakritiSees(String textLower) {
+        try {
+            String text = aakriti().see(textLower, workflow.state());
+            expectedCount = aakriti().expectedCount(configuredCount);
+            return text == null ? textLower : text;
+        } catch (Throwable e) {
+            Log.w(TAG, "Aakriti could not read the screen", e);
+            expectedCount = configuredCount;
+            return textLower;
+        }
+    }
+
+    /** One retailer was given up; Aakriti looks at why so the next one may fare better. */
+    private void aakritiAfterRetailerError(String reason) {
+        try {
+            aakriti().afterRetailerError(this, resolveRoot(), reason);
+        } catch (Throwable e) {
+            Log.w(TAG, "Aakriti could not look at the retailer error", e);
+        }
     }
 
     /**
@@ -683,7 +1244,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         returningToRetailerList = true;
         backSteps = 0;
         workflow.moveTo(BotState.RETURNING_TO_LIST,
-                "Skipped " + retailerId + ": " + reason + " — continuing with the next eligible customer");
+                "Skipped " + retailerId + ": " + reason + " — continuing with the next SMR");
         refreshPanel();
         next(ACTION_DELAY_MS);
     }
@@ -697,6 +1258,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             pendingRecovery = false;
             resetRunCounters();
             workflow.reset("Today's ledger was cleared");
+            startPointForget();
             if (panel != null) panel.toastState("Ledger reset — all retailers eligible again");
         } else if (panel != null) {
             panel.toastState("Reset failed: the ledger file could not be written");
@@ -723,12 +1285,8 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         idleListPolls = 0;
         lastListFingerprint = "";
         listScroller.reset();
+        scrollMemoryReset();
         listBusyUntil = 0;
-        listVisitStarted = false;
-        replayStepsRemaining = 0;
-        replayLastDepth = 0;
-        usedSavedPosition = false;
-        fallbackScanActive = false;
         returningToRetailerList = false;
         pendingTicks = 0;
         lastClickedRetailerId = null;
@@ -792,6 +1350,11 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                     @Override
                     public void onCapture() {
                         captureScreen(true);
+                    }
+
+                    @Override
+                    public void onStopAlarm() {
+                        stopAlarm();
                     }
 
                     @Override
@@ -882,6 +1445,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
 
     private void refreshPanel() {
         if (panel == null || ledger == null) return;
+        startPointNote();
         panel.updateFromLedger(workflow.state(), workflow.retailerId(), workflow.message(),
                 running, ledger, expectedCount);
     }
@@ -898,15 +1462,173 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         scheduleStep(delay);
     }
 
+    /** Until when screen changes are not allowed to re-book the next look. */
+    private long quietUntil;
+
+    /**
+     * Books the next look sooner than {@link #next} allows. Only for the two places that
+     * poll on purpose: the wait for the copied order, and the scroll memory.
+     */
+    private void quick(long delay) {
+        long wait = Math.max(60, delay);
+        handler.removeCallbacks(stepRunnable);
+        handler.removeCallbacks(debouncedStep);
+        quietUntil = System.currentTimeMillis() + wait + 40;
+        handler.postDelayed(stepRunnable, wait);
+    }
+
     // ------------------------------------------------------------- main tick
 
     private void step() {
         if (!running) return;
         try {
-            inspect(resolveRoot());
+            AccessibilityNodeInfo root = resolveRoot();
+            long actedAt = lastActionAt;
+            // While the copy check or the scroll memory is polling, the screen is not read twice.
+            String sawAtStart = System.currentTimeMillis() < quietUntil ? "" : tempoSignature(root);
+            try {
+                inspect(root);
+            } finally {
+                tempoStepped(sawAtStart, actedAt);
+            }
         } catch (Exception e) {
             Log.e(TAG, "Tick failed", e);
             next(IDLE_DELAY_MS);
+        }
+    }
+
+    // ---------------------------------------------------------------- fast mode
+    // An addition (see Tempo.java). The bot's own look - inspect() - and its timers are as
+    // they were, to the line; this only takes the look that was coming anyway some 420 to
+    // 620 ms sooner, when a new page is seen to have come up and to be still. Not used while
+    // an order is being placed and paid for. Fenced: switched off, or on any fault, the old
+    // timing is all there is.
+
+    private final Tempo tempo = new Tempo();
+    private boolean fastMode;
+    private float animationScale = 1f;
+    private static final int TEMPO_MOST_NODES = 500;
+
+    /** Read at START: is fast mode on, and how fast does this phone animate its windows? */
+    private void tempoAtStart() {
+        try {
+            tempo.reset();
+            handler.removeCallbacks(tempoPeek);
+            fastMode = prefs == null || prefs.getBoolean(MainActivity.KEY_FAST_MODE, true);
+            float transitions = Settings.Global.getFloat(getContentResolver(),
+                    Settings.Global.TRANSITION_ANIMATION_SCALE, 1f);
+            float windows = Settings.Global.getFloat(getContentResolver(),
+                    Settings.Global.WINDOW_ANIMATION_SCALE, 1f);
+            animationScale = Math.max(transitions, windows);
+            Log.i(TAG, "Fast mode " + (fastMode ? "on" : "off") + "; animation scale " + animationScale);
+        } catch (Throwable e) {
+            Log.w(TAG, "Fast mode not set up", e);
+            fastMode = false;
+        }
+    }
+
+    /** A change on the Sudha app's screen: book a peek. */
+    private void tempoChanged(AccessibilityEvent event) {
+        if (!fastMode) return;
+        try {
+            long now = System.currentTimeMillis();
+            boolean opened = event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
+            long wait = tempo.changed(now, opened);
+            handler.removeCallbacks(tempoPeek);
+            handler.postDelayed(tempoPeek, wait);
+        } catch (Throwable e) {
+            Log.w(TAG, "Fast mode switched off", e);
+            fastMode = false;
+        }
+    }
+
+    private final Runnable tempoPeek = new Runnable() {
+        @Override
+        public void run() {
+            if (!running || !fastMode) return;
+            try {
+                long now = System.currentTimeMillis();
+                // The copy check and the scroll memory keep their own time.
+                if (now < quietUntil) return;
+                // From just before PLACE ORDER until the order is on record - the confirmation,
+                // the payment - the bot keeps the timing it always had. Money is not hurried.
+                if (ledger == null || ledger.hasPending() || pendingRecovery) return;
+                Tempo.Answer answer = tempo.peek(now, tempoSignature(resolveRoot()), animationScale, lastActionAt);
+                if (answer.verdict == Tempo.Verdict.PEEK) {
+                    handler.postDelayed(this, answer.delay);
+                } else if (answer.verdict == Tempo.Verdict.STEP) {
+                    // Tempo only says so while the bot's own pause after the last change on
+                    // the screen is still running - the pause that would have booked a look
+                    // 420 ms after it ended. That look is taken now instead: the pause and
+                    // the look already booked are dropped, exactly as that look would have
+                    // dropped them, and the look books its own next as every look does.
+                    handler.removeCallbacks(debouncedStep);
+                    handler.removeCallbacks(stepRunnable);
+                    step();
+                }
+            } catch (Throwable e) {
+                Log.w(TAG, "Fast mode switched off", e);
+                fastMode = false;
+            }
+        }
+    };
+
+    private void tempoStepped(String sawAtStart, long actedAt) {
+        if (!fastMode) return;
+        try {
+            tempo.stepped(System.currentTimeMillis(), sawAtStart, lastActionAt != actedAt, lastActionAt);
+        } catch (Throwable e) {
+            fastMode = false;
+        }
+    }
+
+    /**
+     * What the Sudha app's screen reads as, in the form Tempo compares: the window's number,
+     * then every node's words, state and place, in order. Two screens with the same
+     * signature look the same to the bot. Empty when the app is not on screen. Nothing is
+     * kept or sent anywhere.
+     */
+    private String tempoSignature(AccessibilityNodeInfo root) {
+        if (!fastMode || !isTargetRoot(root)) return "";
+        try {
+            StringBuilder out = new StringBuilder(2048);
+            out.append(root.getWindowId());
+            int[] left = {TEMPO_MOST_NODES};
+            tempoWalk(root, out, left, new Rect(), 0);
+            return out.toString();
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    private static void tempoWalk(AccessibilityNodeInfo node, StringBuilder out, int[] left,
+                                  Rect box, int depth) {
+        if (node == null || left[0]-- <= 0 || depth > 40) return;
+        CharSequence text = node.getText();
+        CharSequence said = node.getContentDescription();
+        node.getBoundsInScreen(box);
+        out.append(Tempo.NODE);
+        tempoWords(out, text);
+        out.append(' ');
+        tempoWords(out, said);
+        out.append(Tempo.WORDS_END)
+                .append(node.isEnabled() ? 'e' : '-').append(node.isChecked() ? 'c' : '-')
+                .append(node.isSelected() ? 's' : '-').append(node.isClickable() ? 'k' : '-')
+                .append(box.left).append(',').append(box.top).append(',')
+                .append(box.right).append(',').append(box.bottom);
+        int children = node.getChildCount();
+        for (int i = 0; i < children; i++) {
+            tempoWalk(node.getChild(i), out, left, box, depth + 1);
+        }
+    }
+
+    /** A node's words with the two marks Tempo splits on taken out. */
+    private static void tempoWords(StringBuilder out, CharSequence words) {
+        if (words == null) return;
+        int length = Math.min(words.length(), 200);
+        for (int i = 0; i < length; i++) {
+            char c = words.charAt(i);
+            out.append(c == Tempo.NODE || c == Tempo.WORDS_END ? ' ' : c);
         }
     }
 
@@ -976,7 +1698,10 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             return;
         }
 
-        String text = AccessibilityTree.allText(root).toLowerCase(Locale.ROOT);
+        // Aakriti reads the same text: she keeps count of the retailers the app lists and
+        // puts a label she has learned a new name for back to the name looked for below.
+        // With nothing learned the text comes back exactly as it went in.
+        String text = aakritiSees(AccessibilityTree.allText(root).toLowerCase(Locale.ROOT));
 
         // ---- 1. Walking back to the list after a success or a skip. Checked first so a
         //         success screen that ignores "Done" cannot bounce between handlers.
@@ -1091,6 +1816,11 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             if (returningToRetailerList) return;
         }
 
+        // ---- 1c. "Orders list is empty. Retry?" on the retailer's order page, or the white
+        //          page that message leaves behind. Nothing to copy: do not wait, do not
+        //          press YES; go back to the list and on to the next SMR.
+        if (leavesEmptyOrderList(text)) return;
+
         // ---- 2. Success screen wins over everything else.
         if (looksLikeSuccess(text)) {
             onSuccess(root);
@@ -1195,6 +1925,13 @@ public final class SudhaAccessibilityService extends AccessibilityService {
     // ------------------------------------------------------------ screen: home
 
     private void onHome(AccessibilityNodeInfo root) {
+        boolean manualHome = prefs == null || prefs.getBoolean(MainActivity.KEY_MANUAL_HOME_ENTRY, true);
+        if (manualHome) {
+            workflow.moveTo(BotState.HOME, "Manual Home Entry ON — tap Customers manually to begin");
+            refreshPanel();
+            next(IDLE_DELAY_MS);
+            return;
+        }
         workflow.moveTo(BotState.HOME, "Home screen: opening Customers");
         // Some builds label the tile "Daily Orders" first; tap it if Customers is hidden.
         if (tapLabel(root, "Customers", "Customer", "Retailers", "Customer List")) {
@@ -1214,7 +1951,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             return;
         }
         workflow.moveTo(BotState.HOME, "Looking for the Customers tile");
-        next(guardedIdleDelay());
+        next(IDLE_DELAY_MS);
     }
 
     // --------------------------------------------------- screen: retailer list
@@ -1234,7 +1971,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         }
 
         List<AccessibilityTree.RetailerRow> rows = AccessibilityTree.retailerRows(root);
-        int visibleRows = rows.size();
+        int visibleRetailers = rows.size();
 
         // Leaving the details/history flow: the run is back on the list.
         if (copyPhase != CopyPhase.NONE) resetCopyFlow();
@@ -1242,11 +1979,66 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         historyTicks = 0;
         backSteps = 0;
 
-        // Two rows or fewer means the list is collapsed - but only at the top. After the
-        // bot has scrolled, a short last screenful is just the end of the list, and tapping
-        // Show Retailers there would fold the list up.
-        boolean collapsed = visibleRows <= 2 && !listScroller.scrolledDown();
+        // Section 5 Rule 2: Verify filter dropdown is "All Distributors" before touching Show Retailers.
+        if (!listScroller.scrolledDown() && filterCheckDoneVisit != listScroller.visit()) {
+            filterCheckDoneVisit = listScroller.visit();
+            Object[] dd = DistributorBlueprint.findFilterDropdown(root);
+            if (dd != null) {
+                String ddLabel = (String) dd[1];
+                if (!ddLabel.isEmpty() && !"All Distributors".equalsIgnoreCase(ddLabel)) {
+                    String warn = "Filter dropdown was '" + ddLabel + "' instead of 'All Distributors' — possible app update or filter change";
+                    Log.w(TAG, warn);
+                    SkipLog.add(this, "FILTER", "WARN", warn);
+                    AccessibilityTree.click((AccessibilityNodeInfo) dd[0], gestures);
+                    workflow.moveTo(BotState.RETAILER_LIST, "Resetting filter to All Distributors...");
+                    refreshPanel();
+                    next(ACTION_DELAY_MS);
+                    return;
+                }
+            }
+        }
+
+        // Bug 1 Fix: Treat list as EXPANDED immediately if Total Customers jumped > preShowRetailersTotal,
+        // OR Show Retailers checkbox isChecked(), OR any Delivery Point (Retailer) card is visible.
+        int currentTotalCustomers = AccessibilityTree.customerTotalFromScreen(root);
+        boolean totalJumped = preShowRetailersTotal > 0 && currentTotalCustomers > preShowRetailersTotal;
+        List<DistributorBlueprint.CardInfo> structuralCards = DistributorBlueprint.parseVisibleCards(root);
+        boolean anyRetailerCard = false;
+        for (DistributorBlueprint.CardInfo ci : structuralCards) {
+            if (ci.isRetailer) { anyRetailerCard = true; break; }
+        }
+        AccessibilityNodeInfo srNode = AccessibilityTree.findContaining(root, "show retailers");
+        boolean srChecked = srNode != null && (srNode.isChecked()
+                || (srNode.getParent() != null && srNode.getParent().isChecked()));
+        boolean alreadyExpanded = totalJumped || srChecked || anyRetailerCard || visibleRetailers >= 3;
+
+        // Tier 1 Permanent Distributor Blueprint learning & boycott
+        if (alreadyExpanded && !structuralCards.isEmpty()) {
+            DistributorBlueprint.Classification cls = DistributorBlueprint.classifyOrderedCards(structuralCards);
+            if (!DistributorBlueprint.isLearned(this) && !listScroller.scrolledDown()) {
+                DistributorBlueprint.saveLearnedBlueprint(this, cls, 0);
+                Log.i(TAG, "Tier 1 Blueprint learned: " + DistributorBlueprint.statusSummary(this));
+            }
+            // Filter out any permanently blacklisted ID (including Distributor-Owned Retailer IDs)
+            java.util.Set<String> blacklist = DistributorBlueprint.permanentBlacklist(this);
+            if (!blacklist.isEmpty() || !cls.allBlacklistedIds.isEmpty()) {
+                java.util.List<AccessibilityTree.RetailerRow> filtered = new java.util.ArrayList<>(rows.size());
+                for (AccessibilityTree.RetailerRow r : rows) {
+                    String up = r.id.trim().toUpperCase(Locale.ROOT);
+                    if (!blacklist.contains(up) && !cls.allBlacklistedIds.contains(up)) {
+                        filtered.add(r);
+                    }
+                }
+                rows = filtered;
+                visibleRetailers = rows.size();
+            }
+        }
+
+        boolean collapsed = !alreadyExpanded && !listScroller.scrolledDown();
         if (collapsed) {
+            if (preShowRetailersTotal <= 0 && currentTotalCustomers > 0) {
+                preShowRetailersTotal = currentTotalCustomers;
+            }
             // ---- Step 2: the checkbox never exposes isChecked(), so infer it.
             if (showRetailersClicks >= MAX_SHOW_RETAILERS_CLICKS) {
                 // The list itself will not expand: nothing can be processed, so this is a
@@ -1260,7 +2052,6 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                 listExpansionCooldownTicks = 3;
                 listScroller.leftList();
                 sequence.newVisit();
-                listVisitStarted = false;
                 workflow.moveTo(BotState.RETAILER_LIST,
                         "Tapped Show Retailers (" + showRetailersClicks + "/"
                                 + MAX_SHOW_RETAILERS_CLICKS + "); waiting for ~"
@@ -1275,38 +2066,16 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             }
             workflow.moveTo(BotState.RETAILER_LIST, "Looking for the Show Retailers control");
             refreshPanel();
-            next(guardedIdleDelay());
+            next(IDLE_DELAY_MS);
             return;
         }
 
         // List is expanded: the toggle is on, so never tap it again until it collapses.
         showRetailersClicks = 0;
 
-        if (!listVisitStarted) {
-            if (!RetailerPolicy.isRetailerId(runResumeAnchor)) {
-                runResumeAnchor = ledger.lastHandledId();
-            }
-            sequence.newVisit();
-            listVisitStarted = true;
-            replayLastDepth = listScroller.confirmedScrolls();
-            if (!RetailerPolicy.isRetailerId(runResumeAnchor)) {
-                workflow.moveTo(BotState.RETAILER_LIST,
-                        "Fresh start: processing visible rows; the list's true top cannot be verified here");
-                refreshPanel();
-            }
-        }
-
         // Let the scroller see the rows first, so a scroll that reveals a new retailer is
         // recorded as having worked even though the bot now leaves the list.
         listScroller.observe(rows);
-        if (usedSavedPosition) {
-            int depth = listScroller.confirmedScrolls();
-            int moved = Math.max(0, depth - replayLastDepth);
-            if (moved > 0) {
-                replayStepsRemaining = Math.max(0, replayStepsRemaining - moved);
-                replayLastDepth = depth;
-            }
-        }
 
         // A new set of ids on screen means the scroll actually moved the list.
         String fingerprint = fingerprint(rows);
@@ -1317,31 +2086,22 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             unknownTicks = 0;
         }
 
-        // Choose only from the row order and visible type/name context. A remembered ID
-        // must be present exactly before processing can continue below it.
+        // ---- Which retailer is next. Always the one AFTER the retailer handled last, in
+        //      the order the list shows them; never an earlier row. The app reopens this
+        //      list at the top after every retailer, so "first unhandled row on screen"
+        //      meant going back to the top (SMR2255 after SMR2250 instead of SMR2249).
+        List<String> idsOnScreen = new java.util.ArrayList<>(rows.size());
+        for (AccessibilityTree.RetailerRow row : rows) idsOnScreen.add(row.id);
+        // At the top of a freshly opened list nothing can have been passed yet.
+        if (!listScroller.scrolledDown()) sequence.newVisit();
+        startPointSees(idsOnScreen);
+        // Scroll memory: straight down to where the retailer handled last was, then look.
+        if (scrollMemorySteps(rows, idsOnScreen)) return;
         RetailerSequence.Decision decision = null;
         String last = null;
         for (int guard = 0; guard <= rows.size(); guard++) {
-            last = RetailerPolicy.isRetailerId(runResumeAnchor)
-                    ? runResumeAnchor : ledger.lastHandledId();
-            decision = sequence.decide(rows, last, ledger::isProcessed);
-            if (decision.action == RetailerSequence.Action.STOP_UNCERTAIN) {
-                if (RetailerPolicy.isRetailerId(last) && !sequence.lastSeen()
-                        && !fallbackScanActive) {
-                    fallbackScanActive = true;
-                    usedSavedPosition = false;
-                    restartFromTop("Could not verify the saved list position; scanning for the exact ID "
-                            + last + " from the start");
-                } else {
-                    fail(decision.detail);
-                }
-                return;
-            }
-            if (sequence.lastSeen()) {
-                usedSavedPosition = false;
-                replayStepsRemaining = 0;
-                fallbackScanActive = false;
-            }
+            last = ledger.lastHandledId();
+            decision = sequence.decide(idsOnScreen, last, ledger::isProcessed);
             if (decision.action != RetailerSequence.Action.OPEN) break;
             AccessibilityTree.RetailerRow row = rows.get(decision.index);
 
@@ -1350,7 +2110,6 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                 if (++sameRetailerClickCount > MAX_SAME_ROW_CLICKS) {
                     ledger.record(row.id, LedgerStatus.ERROR,
                             "Row did not open after " + MAX_SAME_ROW_CLICKS + " taps");
-                    runResumeAnchor = row.id;
                     lastClickedRetailerId = null;
                     sameRetailerClickCount = 0;
                     continue;
@@ -1369,29 +2128,13 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                 return;
             }
             lastActionAt = System.currentTimeMillis();
-            int selectedScrollSteps = listScroller.confirmedScrolls();
-            prefs.edit()
-                    .putString(MainActivity.KEY_SCROLL_MEMORY_ID, row.id)
-                    .putInt(MainActivity.KEY_SCROLL_MEMORY_STEPS, selectedScrollSteps)
-                    .apply();
-            if (manualAnchorOverride) {
-                prefs.edit().remove(MainActivity.KEY_LAST_HANDLED_ID).apply();
-                manualAnchorOverride = false;
-                manualResumeAnchor = null;
-            }
-            runResumeAnchor = null;
-            replayStepsRemaining = selectedScrollSteps;
-            replayLastDepth = 0;
-            usedSavedPosition = replayStepsRemaining > 0;
-            fallbackScanActive = false;
             resetCopyFlow();
             detailsTicks = 0;
             scrollsWithoutProgress = 0;
             idleListPolls = 0;
-            lastListFingerprint = "";
+            scrollMemoryNote(row.id);
             listScroller.leftList();
             sequence.newVisit();
-            listVisitStarted = false;
             workflow.moveTo(BotState.DETAILS, last == null
                     ? "Opened " + row.id + "; verifying details header"
                     : "Opened " + row.id + " (next after " + last + "); verifying details header");
@@ -1402,17 +2145,13 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         boolean seekingLast = decision != null
                 && decision.action == RetailerSequence.Action.SCROLL_TO_LAST;
 
-        if (usedSavedPosition && replayStepsRemaining == 0 && !sequence.lastSeen()
-                && decision != null && decision.action == RetailerSequence.Action.SCROLL_TO_LAST
-                && !fallbackScanActive) {
-            fallbackScanActive = true;
-            usedSavedPosition = false;
-            restartFromTop("Saved position did not show " + last
-                    + "; returning to the start to search for that exact ID");
-            return;
-        }
-        if (decision != null && decision.action == RetailerSequence.Action.STOP_UNCERTAIN) {
-            fail(decision.detail);
+        // Every visible retailer is handled. Only finish when the caller's own expectation
+        // is met; otherwise the list simply cannot scroll yet (it may still be rendering)
+        // so keep polling instead of declaring the batch complete.
+        boolean expectationMet = ledger.processedCount() >= expectedCount && visibleRetailers <= 3;
+        if (expectationMet) {
+            ledger.clearLastHandled();
+            complete("All " + ledger.processedCount() + " retailers handled");
             return;
         }
         // Nothing left to do on this screenful: bring up the next one. The scroller checks
@@ -1435,17 +2174,29 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         switch (scroll) {
             case END_OF_LIST:
                 if (seekingLast) {
-                    if (!fallbackScanActive) {
-                        fallbackScanActive = true;
-                        usedSavedPosition = false;
-                        restartFromTop("Could not verify " + last
-                                + " at this position; searching the list from the start");
-                    } else {
-                        fail("Could not find the exact last-handled ID " + last
-                                + " after a full checked scan; stopped without choosing another row");
-                    }
+                    // The bottom of the list was reached and the retailer handled last
+                    // never came into view (it is no longer listed, or a swipe jumped over
+                    // it). The place in the list is lost, so forget it and come down the
+                    // list once more from the top. Retailers already handled are skipped
+                    // by the ledger, so nothing is ordered twice.
+                    Log.w(TAG, "Last handled retailer " + last + " not found; restarting the pass");
+                    restartFromTop(last
+                            + " (handled last) was not found in the list; starting again from the top");
                     return;
                 }
+                // The bottom of the list. If fewer retailers were handled than the list is
+                // expected to hold, some were passed over - the run was started part-way
+                // down, or a retailer was opened by hand in the middle. Go through the
+                // list ONCE more from the top for those; only then is the run finished.
+                if (!sweptFromTop && ledger.processedCount() < expectedCount) {
+                    sweptFromTop = true;
+                    restartFromTop("Reached the end of the list; going through it once more from "
+                            + "the top for any retailer passed over (" + progress + ")");
+                    return;
+                }
+                // The pass is over. Forget the place in the list so that the next START
+                // begins at the top.
+                ledger.clearLastHandled();
                 if (listScroller.everMoved()) {
                     complete("Reached the end of the retailer list (" + ledger.processedCount()
                             + " of " + expectedCount + " handled)");
@@ -1462,7 +2213,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                 idleListPolls = 0;
                 lastActionAt = System.currentTimeMillis();
                 workflow.moveTo(BotState.RETAILER_LIST, seekingLast
-                        ? "Scrolling down to " + last + " (done last); verifying that exact ID ("
+                        ? "Scrolling down to " + last + " (done last); the next SMR is after it ("
                                 + progress + ")"
                         : "All visible retailers handled; scrolling down (" + progress + ")");
                 refreshPanel();
@@ -1473,7 +2224,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                 idleListPolls = 0;
                 lastActionAt = System.currentTimeMillis();
                 workflow.moveTo(BotState.RETAILER_LIST, seekingLast
-                        ? "Swiping up to reach " + last + " (done last); verifying that exact ID ("
+                        ? "Swiping up to reach " + last + " (done last); the next SMR is after it ("
                                 + progress + ")"
                         : "All visible retailers handled; swiping up for more (" + progress + ")");
                 refreshPanel();
@@ -1494,20 +2245,19 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                         "Cannot scroll the list: " + listScroller.note()
                                 + " - drag the bot panel off the list (" + progress + ")");
                 refreshPanel();
-                next(guardedIdleDelay());
+                next(IDLE_DELAY_MS);
         }
     }
 
     /**
-     * Reopens the customer list to begin a checked scan from its starting view. The exact
-     * anchor is still verified after reopening; this does not assume every device restored
-     * the true top of the list.
+     * Forgets the place in the list and brings the list back to its start: Back leads from
+     * the customer list to the first page, and the ordinary flow then opens Customers and
+     * ticks Show Retailers again, which always shows the list from the top.
      */
     private void restartFromTop(String message) {
+        ledger.clearLastHandled();
         sequence.newVisit();
         listScroller.leftList();
-        listVisitStarted = false;
-        lastListFingerprint = "";
         showRetailersClicks = 0;
         workflow.clearRetailer();
         workflow.moveTo(BotState.RETAILER_LIST, message);
@@ -1603,8 +2353,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         sameRetailerClickCount = 0;
 
         List<String> idsOnScreen = AccessibilityTree.visibleRetailerIds(root);
-        boolean exactHeaderMatch = AccessibilityTree.containsExactCustomerId(root, expected);
-        if (!exactHeaderMatch && idsOnScreen.isEmpty() && detailsTicks < 4) {
+        if (idsOnScreen.isEmpty() && detailsTicks < 4) {
             // Header may still be loading.
             detailsTicks++;
             workflow.moveTo(BotState.DETAILS, "Waiting for " + expected + " in the details header");
@@ -1612,7 +2361,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             next(ACTION_DELAY_MS);
             return;
         }
-        if (!exactHeaderMatch && !idsOnScreen.isEmpty()) {
+        if (!idsOnScreen.isEmpty() && !idsOnScreen.contains(expected)) {
             // A different retailer is on screen: never operate on the wrong customer.
             if (ledger.record(expected, LedgerStatus.SKIPPED_ID_MISMATCH,
                     "Details header showed " + idsOnScreen + " instead of " + expected)) {
@@ -1624,10 +2373,6 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             }
             refreshPanel();
             goBackTo(1);
-            return;
-        }
-        if (!exactHeaderMatch) {
-            fail("Could not verify the exact customer ID " + expected + " on the details screen");
             return;
         }
 
@@ -1668,7 +2413,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
      * </ol>
      *
      * <p>If the form still never appears the retailer is recorded as {@code ERROR} and the
-     * run moves on to a different eligible customer ID. It never walks back to "Milk" for the same
+     * run moves on to a different SMR id. It never walks back to "Milk" for the same
      * retailer, which is what caused the earlier 4-retailer loop.</p>
      */
     private void onHistory(AccessibilityNodeInfo root, String text) {
@@ -1965,7 +2710,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
     /**
      * Gives up on one retailer without touching any other: records {@code ERROR}, resets
      * the per-screen budgets and walks back to a clean list position. Crucially it clears
-     * the active customer, so the next pass must pick a different eligible ID.
+     * the active retailer, so the next pass must pick a different SMR id.
      */
     private void abandonRetailer(String retailerId, String reason) {
         if (!ledger.record(retailerId, LedgerStatus.ERROR, reason)) {
@@ -1973,6 +2718,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             return;
         }
         Log.w(TAG, "Retailer " + retailerId + " abandoned: " + reason);
+        aakritiAfterRetailerError(reason);
         resetCopyFlow();
         historyTicks = 0;
         detailsTicks = 0;
@@ -2088,6 +2834,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
 
                 // The form is always empty at this point, so nothing is inspected: copy now.
                 if (tapLabel(root, "Copy Order", "Copy order", "COPY ORDER")) {
+                    copyOutcomeBefore(text);
                     awaitingRetryAfterPopup = false;
                     popupDismissTicks = 0;
                     copyPhase = CopyPhase.AWAIT_CALENDAR;
@@ -2157,18 +2904,22 @@ public final class SudhaAccessibilityService extends AccessibilityService {
     private void onAwaitCopyResult(AccessibilityNodeInfo root, String text, String expected) {
         // 1. A dialog means this date has no data. Dismiss it and step back a day.
         if (popupBlocksCopy(root, text)) {
+            copyOutcomeRefused();
             onCopyFailure(root);
             return;
         }
 
-        // 2. No dialog yet: wait out the settle period before trusting that.
-        if (resultTicks++ < COPY_SETTLE_TICKS) {
-            workflow.moveTo(BotState.COPY_ORDER,
-                    "Waiting for the error dialog (" + DateRollbackPolicy.label(dateAttempt)
-                            + ", " + resultTicks + "/" + COPY_SETTLE_TICKS + ")");
-            refreshPanel();
-            next(ACTION_DELAY_MS);
-            return;
+        // 2. No dialog yet. Look every 150 ms: the moment the copied rows are in the form
+        //    the wait is over; without that proof, the settle period is waited out as before.
+        if (resultTicks < COPY_SETTLE_TICKS) {
+            if (resultTicks == 0) {
+                resultTicks = 1;
+                workflow.moveTo(BotState.COPY_ORDER, "Checking " + DateRollbackPolicy.label(dateAttempt)
+                        + ": order or error dialog");
+                refreshPanel();
+            }
+            if (copyOutcomeWaits(root, text)) return;
+            resultTicks = COPY_SETTLE_TICKS;
         }
 
         // 3. No dialog after the settle period: the copy worked. Submit without inspecting.
@@ -2195,10 +2946,11 @@ public final class SudhaAccessibilityService extends AccessibilityService {
      * Gives up on one retailer without placing an order.
      *
      * <p>Records {@link LedgerStatus#SKIPPED_NO_DATA} so the retailer is never revisited
-     * today, then walks back to the customer list for the next eligible ID.</p>
+     * today, then walks back to the customer list for the next SMR id.</p>
      */
     private void abandonOrder(String retailerId, String reason) {
         if (ledger.record(retailerId, LedgerStatus.SKIPPED_NO_DATA, reason)) {
+            skipLog(retailerId, SkipLine.COPY_PROBLEM, reason);
             workflow.moveTo(BotState.RETURNING_TO_LIST, retailerId + " skipped: " + reason);
             refreshPanel();
         } else {
@@ -2473,16 +3225,18 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         if (CalendarDateSelector.confirm(root)) {
             copyPhase = CopyPhase.AWAIT_RESULT;
             resultTicks = 0;
+            copyOutcomeBegins();
             workflow.moveTo(BotState.COPY_ORDER,
                     "Confirmed " + target + " (" + proof + "); loading the copied order");
             refreshPanel();
-            next(ACTION_DELAY_MS);
+            quick(CopyOutcome.FIRST_LOOK_MS);
             return;
         }
         // No OK button: the day tap itself submits the dialog.
         copyPhase = CopyPhase.AWAIT_RESULT;
         resultTicks = 0;
-        next(FAST_DELAY_MS);
+        copyOutcomeBegins();
+        quick(CopyOutcome.FIRST_LOOK_MS);
     }
 
     /**
@@ -2832,6 +3586,8 @@ public final class SudhaAccessibilityService extends AccessibilityService {
                 fail("Could not record SKIPPED_NO_DATA for " + expected);
                 return;
             }
+            skipLog(expected, SkipLine.NO_ORDER_5_DATES, "No order to copy for "
+                    + DateRollbackPolicy.label(0) + " to " + DateRollbackPolicy.label(MAX_DATE_ATTEMPTS - 1));
             // Save the skip first, then leave the form: if the Back never registers, the
             // ledger already prevents this retailer from being retried.
             goBackTo(2);
@@ -2972,6 +3728,15 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             onPendingScreen(root, AccessibilityTree.allText(root).toLowerCase(Locale.ROOT));
             return;
         }
+        // Section 10: Apply Customer Demand overrides or Employee's Chance anti-bot scatter BEFORE PLACE ORDER
+        int editedCells = QuantityModes.applyEditsToOrderForm(
+                root, this, expected, ledger.processedCount() + 1, expectedCount, gestures);
+        if (editedCells > 0) {
+            workflow.moveTo(BotState.PLACE_ORDER, "Applied " + editedCells + " qty edit(s) for " + expected);
+            refreshPanel();
+            next(FAST_DELAY_MS);
+            return;
+        }
         workflow.moveTo(BotState.PLACE_ORDER, "Items copied; placing the order for " + expected);
         refreshPanel();
 
@@ -3041,7 +3806,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         // about looks exactly like this. Waiting longer cannot help, and stopping the whole
         // run for one retailer is what the operator asked not to happen. So after a fixed
         // wait the retailer is put on record as "not confirmed - check it" and the bot goes
-        // on to the next eligible customer. PLACE ORDER is never pressed a second time.
+        // on to the next SMR. PLACE ORDER is never pressed a second time.
         boolean formStillOpen = "PLACE_TAPPED".equals(phase)
                 && !looksLikePaymentScreenText(textLower)
                 && looksLikeOrderForm(textLower) && hasPlaceOrder(root)
@@ -3077,6 +3842,12 @@ public final class SudhaAccessibilityService extends AccessibilityService {
             }
         }
 
+        // Section 8 Step 7: Manual Payment Pause mode (if enabled in settings)
+        boolean manualPaymentPause = prefs != null && prefs.getBoolean(MainActivity.KEY_MANUAL_PAYMENT_PAUSE, false);
+        if (manualPaymentPause && looksLikePaymentScreenText(textLower)) {
+            pause("Manual Payment: complete payment for " + pendingId + ", then tap START");
+            return;
+        }
         // Restarted mid-payment: navigation is safe, a second PAY is not.
         boolean maySubmitPayment = !pendingRecovery;
         if (looksLikePaymentScreenText(textLower)) {
@@ -3161,7 +3932,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
     /**
      * PLACE ORDER was pressed and nothing followed: the order form is still open and no
      * payment screen came. The retailer is recorded as unconfirmed (it shows under ERRORS
-     * and is not touched again today) and the run continues with the next eligible customer.
+     * and is not touched again today) and the run continues with the next SMR.
      */
     private void onPlaceOrderUnanswered(String retailerId, long waitedMs) {
         String detail = "PLACE ORDER was pressed but no payment screen opened in "
@@ -3187,7 +3958,7 @@ public final class SudhaAccessibilityService extends AccessibilityService {
         relaunches = 0;
         workflow.moveTo(BotState.RETURNING_TO_LIST, retailerId
                 + ": no payment screen after PLACE ORDER (probably already ordered today)"
-                + " - noted under ERRORS, going to the next eligible customer");
+                + " - noted under ERRORS, going to the next SMR");
         refreshPanel();
         performGlobalAction(GLOBAL_ACTION_BACK);
         lastActionAt = System.currentTimeMillis();

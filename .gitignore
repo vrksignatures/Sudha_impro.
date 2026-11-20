@@ -1,0 +1,37 @@
+# Gradle
+.gradle/
+build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.hprof
+
+# Keystores — never commit signing material
+*.jks
+*.keystore
+
+# Output
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reference material from on-device testing (screen recordings are large)
+google_drive/
+frames/
+key/
+audio/
+wa/
+*.mp4
+
+# Self-test build output
+tools/selftest/out/

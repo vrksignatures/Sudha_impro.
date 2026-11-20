@@ -15,6 +15,8 @@ public enum LedgerStatus {
      * already has today's order, so there is nothing for the bot to do.
      */
     ALREADY_ORDERED("SKIPPED"),
+    /** Above the start point given by the operator; not opened by the bot. */
+    DONE_BEFORE("SKIPPED"),
     /** Details header did not match the row that was tapped. */
     SKIPPED_ID_MISMATCH("SKIPPED"),
     /** Something went wrong with this retailer; it is not retried today. */

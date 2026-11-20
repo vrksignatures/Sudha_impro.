@@ -43,8 +43,13 @@ class RetailerListModel implements AccessibilityTree.Gestures {
     /** Extra distance the list runs on after a drag (a fling), in pixels. */
     int flingAfterDrag;
 
+    /** The figure printed above the list; by default every row, the distributor included. */
+    int headerCount = -1;
+
     int scroll;
     int actionRequests, actionsOnDecoy, actionsOnPager, drags, dragsOnPanel;
+    /** Requests to scroll up (only the scroll memory makes them). */
+    int backRequests;
     /** Longest drag sent so far, in pixels. */
     int longestDrag;
     /** Every retailer that has been on screen at some point, in order of first appearance. */
@@ -66,7 +71,8 @@ class RetailerListModel implements AccessibilityTree.Gestures {
     AccessibilityNodeInfo build() {
         AccessibilityNodeInfo root = node("android.widget.FrameLayout", null, 0, 0, SCREEN_W, SCREEN_H);
         root.add(node("android.widget.TextView", "Customers", 0, 60, SCREEN_W, 160));
-        root.add(node("android.widget.TextView", "Total Customers: " + ids.size(), 30, 180, 400, 230));
+        root.add(node("android.widget.TextView",
+                "Total Customers: " + (headerCount >= 0 ? headerCount : ids.size()), 30, 180, 400, 230));
         root.add(node("android.widget.TextView", "All Distributors", 30, 250, 400, 300));
         root.add(node("android.widget.CheckBox", "Show Retailers", 30, 340, 400, 400));
 
@@ -95,6 +101,13 @@ class RetailerListModel implements AccessibilityTree.Gestures {
         AccessibilityNodeInfo list = node("androidx.recyclerview.widget.RecyclerView", null, 0, LIST_TOP, SCREEN_W, listBottom);
         list.scrollable = mode != Mode.NOT_SCROLLABLE;
         list.handler = (n, action) -> {
+            if (action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) {
+                // Up a page; refused at the top, as a RecyclerView does.
+                backRequests++;
+                if (mode != Mode.ACTION_WORKS || scroll <= 0) return false;
+                scrollBy(-(listBottom - LIST_TOP));
+                return true;
+            }
             if (action != AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) return false;
             actionRequests++;
             switch (mode) {

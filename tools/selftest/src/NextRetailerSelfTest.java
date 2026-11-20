@@ -30,6 +30,7 @@ public final class NextRetailerSelfTest {
         lostPlace();
         numberingDoesNotMatter();
         notices();
+        emptyOrderList();
         System.out.println();
         System.out.println(failures == 0
                 ? "ALL " + checks + " CHECKS PASSED"
@@ -271,5 +272,107 @@ public final class NextRetailerSelfTest {
         for (String text : no) check(!AppNotices.isAlreadyOrdered(text), "not mistaken for it: " + text);
         System.out.println("  " + yes.length + " wordings recognised, " + no.length
                 + " other messages from the app left alone");
+    }
+
+    // ------------------------------------------------------------------ G
+    /**
+     * "Orders list is empty. Retry?" - the white page behind SMR2235 in the screen
+     * recording of 18 Nov 2026. The texts are what the page says, top to bottom.
+     */
+    private static void emptyOrderList() {
+        section("G. Recognising \"Orders list is empty. Retry?\"");
+        String bar = "New Order Milk November,2026 Orders list is empty. Retry? YES";
+        String[] said = {"Orders list is empty. Retry?", "orders list is empty. retry?", bar,
+                bar.toLowerCase(), "New Order Milk\nNovember,2026\nOrders  list is\nempty. Retry?\nYES",
+                "Order list is empty, retry?", "Order list is empty", "Orders list empty"};
+        for (String text : said) check(AppNotices.isEmptyOrderList(text), "recognised: " + text);
+
+        String card = "New Order Milk November,2026 Order created on 17 Nov,2026 Order Id 5521 "
+                + "Products 4 Order Qty 12 Order placed";
+        String form = "New Order Milk Date 18-11-2026 Item Group Milk Zone PATNA Party DINANATH SWEETS "
+                + "Copy Order Item Rate MQty EQty Total PLACE ORDER View Order Summary";
+        String details = "Customer Details Name DINANATH SWEETS (SMR2235) Distributor Name ( SM65 ) "
+                + "View Orders Milk PROD Transactions Pay";
+        String list = "Total Customers: 125 All Distributors Show Retailers KGN ROYAL (SMR2234)";
+        String[] notSaid = {"", null, card, form, details, list, "Loading", "Getting placed orders...",
+                "Today Order already created", "No order to copy from selected date",
+                "Successfully Payment Created Done", "New Order Milk November,2026",
+                // A card under a bar that has not gone yet: the list is not empty.
+                card + " Orders list is empty. Retry? YES",
+                "Your cart is empty", "List is empty"};
+        for (String text : notSaid) {
+            check(!AppNotices.isEmptyOrderList(text), "not mistaken for the message: " + text);
+        }
+
+        String[] blank = {"New Order Milk November,2026", "new order milk november,2026",
+                "New Order Milk", "New Order Milk\n November,2026 \n", "New Order Milk December,2026"};
+        for (String text : blank) check(AppNotices.isBlankOrderList(text), "white order page: " + text);
+        String[] notBlank = {"", null, card, form, details, list, "Loading", "Getting placed orders...",
+                "New Order Milk Getting placed orders...", "New Order Milk Loading",
+                "New Order Milk November,2026 Order created on 17 Nov,2026",
+                "New Order Milk Date Item Group Zone Party", "New Order Milk PLACE ORDER",
+                "Successfully Payment Created Done", "November,2026", "Customer Details",
+                "New Order Milk " + "x".repeat(200)};
+        for (String text : notBlank) {
+            check(!AppNotices.isBlankOrderList(text), "not taken for the white page: " + text);
+        }
+        // The message is not "already ordered" and the reverse.
+        check(!AppNotices.isAlreadyOrdered(bar), "the empty-list message is not \"already created\"");
+        check(!AppNotices.isEmptyOrderList("Today Order already created"),
+                "\"already created\" is not the empty-list message");
+
+        // How the service uses the rule. Read from its source: the service needs a phone.
+        String service = source("SudhaAccessibilityService.java");
+        int inspect = service.indexOf("private void inspect(");
+        int step1c = service.indexOf("if (leavesEmptyOrderList(text)) return;", inspect);
+        int step1b = service.indexOf("onAlreadyOrdered(\"Today Order already created\")", inspect);
+        int step2 = service.indexOf("if (looksLikeSuccess(text)) {", inspect);
+        int step11 = service.indexOf("Waiting for a recognised Sudha screen", inspect);
+        check(inspect > 0 && step1c > step1b && step1b > 0, "checked on every look at the screen, after \"already created\"");
+        check(step1c < step2 && step1c < step11, "and before the bot can decide the screen is unknown");
+        String leave = body(service, "private boolean onEmptyOrderList(");
+        check(leave.contains("LedgerStatus.SKIPPED_NO_HISTORY"), "the retailer goes on record as skipped");
+        check(leave.contains("performGlobalAction(GLOBAL_ACTION_BACK)"), "Back is pressed at once");
+        check(leave.contains("returningToRetailerList = true"), "and the walk back to the list takes over");
+        check(leave.contains("workflow.clearRetailer()"), "the retailer is let go, so the next SMR is opened");
+        check(!leave.contains("tapLabel(") && !leave.contains("\"YES\"") && !leave.contains("tapDialogOk"),
+                "YES (retry) is never pressed");
+        check(!leave.contains("tapAddButton"), "and neither is +");
+        check(leave.contains("ledger.hasPending()"), "an order that may be on its way is not abandoned here");
+        String wait = body(service, "private boolean leavesEmptyOrderList(");
+        check(wait.indexOf("AppNotices.isEmptyOrderList(text)") < wait.indexOf("BLANK_ORDER_LIST_MS")
+                        && wait.indexOf("AppNotices.isEmptyOrderList(text)") > 0,
+                "the message itself is acted on without any wait");
+        check(wait.contains("AppNotices.isBlankOrderList(text)") && wait.contains("MIN_BLANK_ORDER_LIST_TICKS"),
+                "the white page alone has to stay white for a few seconds first");
+        String back = service.substring(service.indexOf("if (returningToRetailerList) {", inspect), step1b);
+        check(back.contains("onRetailerList(root)") && back.contains("performGlobalAction(GLOBAL_ACTION_BACK)"),
+                "the walk back presses Back until the list is on screen");
+        String onList = body(service, "private void onRetailerList(");
+        check(onList.toLowerCase().contains("show retailers"), "and the list handler ticks Show Retailers again");
+        System.out.println("  " + said.length + " wordings recognised, " + blank.length
+                + " white pages, " + (notSaid.length + notBlank.length) + " other screens left alone");
+    }
+
+    private static String source(String name) {
+        try {
+            return new String(java.nio.file.Files.readAllBytes(new java.io.File(
+                    "../../app/src/main/java/com/vrksignatures/sudhaautobot/" + name).toPath()), "UTF-8");
+        } catch (Exception e) {
+            throw new IllegalStateException("cannot read " + name, e);
+        }
+    }
+
+    /** The text of one method: from its first line to the brace that closes it. */
+    private static String body(String source, String firstLine) {
+        int from = source.indexOf(firstLine);
+        if (from < 0) return "";
+        int depth = 0;
+        for (int i = source.indexOf('{', from); i >= 0 && i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (c == '{') depth++;
+            if (c == '}' && --depth == 0) return source.substring(from, i + 1);
+        }
+        return "";
     }
 }
